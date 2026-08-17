@@ -1,12 +1,15 @@
 import SwiftUI
 
-/// Translucent summary metric card with glowing iconography and Apple-style depth.
+/// A restrained summary card with stable numeric typography and immediate pointer feedback.
 public struct HeroMetricsCard: View {
     public let title: String
     public let value: String
     public let subtitle: String
     public let iconName: String
     public let accentColor: Color
+    public let isProminent: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     public init(
@@ -14,78 +17,60 @@ public struct HeroMetricsCard: View {
         value: String,
         subtitle: String,
         iconName: String,
-        accentColor: Color
+        accentColor: Color,
+        isProminent: Bool = false
     ) {
         self.title = title
         self.value = value
         self.subtitle = subtitle
         self.iconName = iconName
         self.accentColor = accentColor
+        self.isProminent = isProminent
     }
 
     public var body: some View {
-        HStack(spacing: 16) {
-            // Icon with soft glow
-            ZStack {
-                Circle()
-                    .fill(accentColor.opacity(0.18))
-                    .frame(width: 44, height: 44)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text(title.uppercased())
+                    .font(.system(size: 9, weight: .semibold))
+                    .tracking(0.65)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
 
                 Image(systemName: iconName)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(accentColor)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(accentColor)
+                    .frame(width: 27, height: 27)
+                    .background(accentColor.opacity(isProminent ? 0.16 : 0.11), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .tracking(0.5)
-                    .foregroundColor(.secondary)
-
+            VStack(alignment: .leading, spacing: 4) {
                 Text(value)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(.system(size: isProminent ? 25 : 22, weight: .bold, design: .rounded))
+                    .tracking(-0.45)
                     .monospacedDigit()
-                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .contentTransition(.numericText())
 
                 Text(subtitle)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundColor(.secondary.opacity(0.8))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(isHovered ? 0.25 : 0.12),
-                                    Color.white.opacity(0.04)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1
-                        )
-                )
-                .shadow(
-                    color: Color.black.opacity(isHovered ? 0.08 : 0.03),
-                    radius: isHovered ? 8 : 4,
-                    x: 0,
-                    y: isHovered ? 4 : 2
-                )
-        )
-        .scaleEffect(isHovered ? 1.01 : 1.0)
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isHovered)
-        .onHover { hovering in
-            isHovered = hovering
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background {
+            if isProminent {
+                RoundedRectangle(cornerRadius: NetCollectDesign.cardRadius, style: .continuous)
+                    .fill(accentColor.opacity(0.055))
+            }
         }
+        .netCollectSurface()
+        .offset(y: isHovered && !reduceMotion ? -2 : 0)
+        .animation(.spring(response: 0.32, dampingFraction: 1), value: isHovered)
+        .onHover { isHovered = $0 }
     }
 }

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Custom Apple-style segmented picker with smooth spring animation, high contrast, and reliable hit testing.
+/// Compact period selector used where a sidebar is not available.
 public struct TimeframeSegmentPicker: View {
     @Binding var selected: TimeframeFilter
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var animationNamespace
 
     public init(selected: Binding<TimeframeFilter>) {
@@ -10,44 +11,37 @@ public struct TimeframeSegmentPicker: View {
     }
 
     public var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 2) {
             ForEach(TimeframeFilter.allCases) { timeframe in
                 let isSelected = selected == timeframe
+
                 Button {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 1)) {
                         selected = timeframe
                     }
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: timeframe.iconName)
-                            .font(.system(size: 11, weight: isSelected ? .bold : .medium))
-                        Text(timeframe.title)
-                            .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .foregroundColor(isSelected ? .white : .primary.opacity(0.75))
-                    .background {
-                        if isSelected {
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color.accentColor)
-                                .shadow(color: Color.accentColor.opacity(0.3), radius: 4, x: 0, y: 1)
-                                .matchedGeometryEffect(id: "ActiveTimeframeTab", in: animationNamespace)
+                    Text(timeframe.title)
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 9)
+                        .frame(height: 27)
+                        .background {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(.background)
+                                    .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
+                                    .matchedGeometryEffect(id: "selectedPeriod", in: animationNamespace)
+                            }
                         }
-                    }
-                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(NetCollectPressStyle())
             }
         }
-        .padding(4)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.7))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
+        .padding(3)
+        .background(Color.primary.opacity(0.065), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Usage period")
     }
 }

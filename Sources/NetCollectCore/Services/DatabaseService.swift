@@ -301,13 +301,12 @@ public final class DatabaseService: @unchecked Sendable {
 
         switch grouping {
         case .hourly:
-            // Generate hours from start of day up to current hour
             let hourFormatter = DateFormatter()
             hourFormatter.dateFormat = "ha" // e.g. 2PM
             let startOfTargetDay = calendar.startOfDay(for: startDate)
             var current = startOfTargetDay
-            let currentHourComponents = calendar.dateComponents([.year, .month, .day, .hour], from: endDate)
-            let currentHourDate = calendar.date(from: currentHourComponents) ?? endDate
+            let endHourComponents = calendar.dateComponents([.year, .month, .day, .hour], from: endDate)
+            let endHourDate = calendar.date(from: endHourComponents) ?? endDate
 
             var map: [Date: (in: UInt64, out: UInt64)] = [:]
             for p in rawPoints {
@@ -317,7 +316,7 @@ public final class DatabaseService: @unchecked Sendable {
                 }
             }
 
-            while current <= currentHourDate {
+            while current <= endHourDate {
                 let comps = calendar.dateComponents([.year, .month, .day, .hour], from: current)
                 let bucketDate = calendar.date(from: comps) ?? current
                 let data = map[bucketDate] ?? (0, 0)

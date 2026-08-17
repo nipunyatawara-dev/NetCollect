@@ -11,8 +11,8 @@ func generateAppIcon(outputPath: String) {
     ctx.saveGState()
 
     // 1. Drop shadow behind the macOS squircle
-    let shadowColor = NSColor.black.withAlphaComponent(0.28).cgColor
-    ctx.setShadow(offset: CGSize(width: 0, height: -24), blur: 36, color: shadowColor)
+    let shadowColor = NSColor.black.withAlphaComponent(0.30).cgColor
+    ctx.setShadow(offset: CGSize(width: 0, height: -26), blur: 36, color: shadowColor)
 
     // macOS standard icon squircle bounds (inside 1024x1024 canvas)
     let margin: CGFloat = 100
@@ -21,84 +21,74 @@ func generateAppIcon(outputPath: String) {
     let squirclePath = CGPath(roundedRect: squircleRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
 
     ctx.addPath(squirclePath)
-    ctx.setFillColor(NSColor(calibratedRed: 0.08, green: 0.12, blue: 0.22, alpha: 1.0).cgColor)
+    ctx.setFillColor(NSColor(calibratedRed: 0.00, green: 0.40, blue: 0.90, alpha: 1.0).cgColor)
     ctx.fillPath()
 
     ctx.restoreGState()
 
-    // 2. Main squircle background gradient (Dark navy to deep midnight blue)
+    // 2. Main squircle background gradient (Signature vibrant Apple Blue)
     ctx.saveGState()
     ctx.addPath(squirclePath)
     ctx.clip()
 
     let colorSpace = CGColorSpaceCreateDeviceRGB()
     let bgColors = [
-        NSColor(calibratedRed: 0.10, green: 0.16, blue: 0.32, alpha: 1.0).cgColor,
-        NSColor(calibratedRed: 0.05, green: 0.08, blue: 0.18, alpha: 1.0).cgColor,
-        NSColor(calibratedRed: 0.02, green: 0.04, blue: 0.10, alpha: 1.0).cgColor
+        NSColor(calibratedRed: 0.12, green: 0.60, blue: 1.00, alpha: 1.0).cgColor,
+        NSColor(calibratedRed: 0.00, green: 0.48, blue: 0.95, alpha: 1.0).cgColor,
+        NSColor(calibratedRed: 0.00, green: 0.36, blue: 0.86, alpha: 1.0).cgColor
     ] as CFArray
 
-    if let gradient = CGGradient(colorsSpace: colorSpace, colors: bgColors, locations: [0.0, 0.6, 1.0]) {
+    if let gradient = CGGradient(colorsSpace: colorSpace, colors: bgColors, locations: [0.0, 0.45, 1.0]) {
         ctx.drawLinearGradient(gradient, start: CGPoint(x: 512, y: 924), end: CGPoint(x: 512, y: 100), options: [])
     }
 
-    // Subtle radial glow in center
-    let glowColors = [
-        NSColor(calibratedRed: 0.0, green: 0.50, blue: 1.0, alpha: 0.40).cgColor,
-        NSColor(calibratedRed: 0.0, green: 0.50, blue: 1.0, alpha: 0.0).cgColor
-    ] as CFArray
-    if let radialGlow = CGGradient(colorsSpace: colorSpace, colors: glowColors, locations: [0.0, 1.0]) {
-        ctx.drawRadialGradient(radialGlow, startCenter: CGPoint(x: 512, y: 512), startRadius: 0, endCenter: CGPoint(x: 512, y: 512), endRadius: 380, options: [])
-    }
-
-    // Top inset highlight (Apple light catching material edge)
-    ctx.setLineWidth(3.0)
-    ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.22).cgColor)
+    // Top inset subtle light-catching edge
+    ctx.setLineWidth(3.5)
+    ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.30).cgColor)
     ctx.addPath(squirclePath)
     ctx.strokePath()
 
-    // 3. Central Minimalist Network Rings
-    let center = CGPoint(x: 512, y: 512)
+    // 3. Central White Chart Bars Artwork (matching chart.bar.xaxis symbol)
+    let barColor = NSColor.white.cgColor
+    let baselineY: CGFloat = 330
+    let barWidth: CGFloat = 78
+    let corner: CGFloat = 26
 
-    // Outer subtle orbit ring 4
+    // Bar 1 (Lowest)
+    let b1Height: CGFloat = 180
+    let b1Rect = CGRect(x: 290, y: baselineY, width: barWidth, height: b1Height)
+    let b1Path = CGPath(roundedRect: b1Rect, cornerWidth: corner, cornerHeight: corner, transform: nil)
+
+    // Bar 2 (Medium High)
+    let b2Height: CGFloat = 320
+    let b2Rect = CGRect(x: 398, y: baselineY, width: barWidth, height: b2Height)
+    let b2Path = CGPath(roundedRect: b2Rect, cornerWidth: corner, cornerHeight: corner, transform: nil)
+
+    // Bar 3 (Medium)
+    let b3Height: CGFloat = 240
+    let b3Rect = CGRect(x: 506, y: baselineY, width: barWidth, height: b3Height)
+    let b3Path = CGPath(roundedRect: b3Rect, cornerWidth: corner, cornerHeight: corner, transform: nil)
+
+    // Bar 4 (Tallest)
+    let b4Height: CGFloat = 430
+    let b4Rect = CGRect(x: 614, y: baselineY, width: barWidth, height: b4Height)
+    let b4Path = CGPath(roundedRect: b4Rect, cornerWidth: corner, cornerHeight: corner, transform: nil)
+
+    // Axis horizontal bar at base
+    let axisRect = CGRect(x: 260, y: baselineY - 45, width: 504, height: 26)
+    let axisPath = CGPath(roundedRect: axisRect, cornerWidth: 13, cornerHeight: 13, transform: nil)
+
+    // Draw with soft glow/shadow for crisp Apple look
     ctx.saveGState()
-    ctx.setLineWidth(5.0)
-    ctx.setStrokeColor(NSColor(calibratedRed: 0.2, green: 0.6, blue: 1.0, alpha: 0.20).cgColor)
-    ctx.addArc(center: center, radius: 270, startAngle: 0, endAngle: CGFloat.pi * 2, clockwise: false)
-    ctx.strokePath()
-    ctx.restoreGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 16, color: NSColor.black.withAlphaComponent(0.18).cgColor)
+    ctx.setFillColor(barColor)
 
-    // Orbit ring 3
-    ctx.saveGState()
-    ctx.setLineWidth(7.0)
-    ctx.setStrokeColor(NSColor(calibratedRed: 0.15, green: 0.65, blue: 1.0, alpha: 0.45).cgColor)
-    ctx.addArc(center: center, radius: 200, startAngle: 0, endAngle: CGFloat.pi * 2, clockwise: false)
-    ctx.strokePath()
-    ctx.restoreGState()
-
-    // Orbit ring 2
-    ctx.saveGState()
-    ctx.setLineWidth(9.0)
-    ctx.setStrokeColor(NSColor(calibratedRed: 0.2, green: 0.75, blue: 1.0, alpha: 0.75).cgColor)
-    ctx.addArc(center: center, radius: 130, startAngle: 0, endAngle: CGFloat.pi * 2, clockwise: false)
-    ctx.strokePath()
-    ctx.restoreGState()
-
-    // Inner ring 1
-    ctx.saveGState()
-    ctx.setLineWidth(11.0)
-    ctx.setStrokeColor(NSColor(calibratedRed: 0.35, green: 0.85, blue: 1.0, alpha: 0.95).cgColor)
-    ctx.addArc(center: center, radius: 65, startAngle: 0, endAngle: CGFloat.pi * 2, clockwise: false)
-    ctx.strokePath()
-    ctx.restoreGState()
-
-    // Center Glowing Core Node
-    ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: 0), blur: 32, color: NSColor(calibratedRed: 0.1, green: 0.7, blue: 1.0, alpha: 1.0).cgColor)
-
-    let centerNodeRect = CGRect(x: center.x - 22, y: center.y - 22, width: 44, height: 44)
-    ctx.setFillColor(NSColor.white.cgColor)
-    ctx.fillEllipse(in: centerNodeRect)
+    ctx.addPath(b1Path)
+    ctx.addPath(b2Path)
+    ctx.addPath(b3Path)
+    ctx.addPath(b4Path)
+    ctx.addPath(axisPath)
+    ctx.fillPath()
     ctx.restoreGState()
 
     ctx.restoreGState() // pop squircle clip
@@ -110,7 +100,7 @@ func generateAppIcon(outputPath: String) {
        let bitmapImage = NSBitmapImageRep(data: tiffData),
        let pngData = bitmapImage.representation(using: .png, properties: [:]) {
         try? pngData.write(to: URL(fileURLWithPath: outputPath))
-        print("Generated clean icon at \(outputPath)")
+        print("Generated clean blue icon at \(outputPath)")
     }
 }
 

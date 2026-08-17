@@ -21,20 +21,23 @@ public enum TimeframeFilter: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Computes the start date for this timeframe relative to the current calendar.
+    /// Computes the start and end date for this timeframe relative to the calendar.
     public func dateInterval(for referenceDate: Date = Date(), calendar: Calendar = .current) -> DateInterval {
         switch self {
         case .daily:
             let start = calendar.startOfDay(for: referenceDate)
-            return DateInterval(start: start, end: referenceDate)
+            let end = calendar.date(byAdding: .day, value: 1, to: start)?.addingTimeInterval(-1) ?? referenceDate
+            return DateInterval(start: start, end: end)
         case .weekly:
             let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: referenceDate)
             let start = calendar.date(from: components) ?? calendar.startOfDay(for: referenceDate)
-            return DateInterval(start: start, end: referenceDate)
+            let end = calendar.date(byAdding: .day, value: 7, to: start)?.addingTimeInterval(-1) ?? referenceDate
+            return DateInterval(start: start, end: end)
         case .monthly:
             let components = calendar.dateComponents([.year, .month], from: referenceDate)
             let start = calendar.date(from: components) ?? calendar.startOfDay(for: referenceDate)
-            return DateInterval(start: start, end: referenceDate)
+            let end = calendar.date(byAdding: .month, value: 1, to: start)?.addingTimeInterval(-1) ?? referenceDate
+            return DateInterval(start: start, end: end)
         }
     }
 
@@ -49,13 +52,13 @@ public enum TimeframeFilter: String, CaseIterable, Identifiable, Sendable {
             formatter.timeStyle = .none
             return "Today (\(formatter.string(from: referenceDate)))"
         case .weekly:
-            formatter.dateFormat = "MMM d"
+            formatter.dateFormat = "d MMM"
             let startStr = formatter.string(from: interval.start)
             let endStr = formatter.string(from: interval.end)
-            return "\(startStr) – \(endStr)"
+            return "This Week (\(startStr) – \(endStr))"
         case .monthly:
             formatter.dateFormat = "MMMM yyyy"
-            return formatter.string(from: referenceDate)
+            return "This Month (\(formatter.string(from: referenceDate)))"
         }
     }
 }

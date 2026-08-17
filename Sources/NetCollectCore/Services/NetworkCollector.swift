@@ -41,6 +41,7 @@ public final class NetworkCollector: @unchecked Sendable {
     private var lastSampleTime: Date = Date()
     private var currentIntervalBytesIn: UInt64 = 0
     private var currentIntervalBytesOut: UInt64 = 0
+    private var sampleHeadersSeen = 0
 
     // Callback on data collection
     public var onDeltaReceived: (@Sendable (NetworkDeltaEvent) -> Void)?
@@ -103,6 +104,11 @@ public final class NetworkCollector: @unchecked Sendable {
 
     private func launchNettop() {
         terminateProcess()
+
+        sampleHeadersSeen = 0
+        lineBuffer = ""
+        currentIntervalBytesIn = 0
+        currentIntervalBytesOut = 0
 
         let pipe = Pipe()
         self.stdoutPipe = pipe
@@ -170,8 +176,26 @@ public final class NetworkCollector: @unchecked Sendable {
 
             guard !line.isEmpty else { continue }
 
-            // Skip header line ",bytes_in,bytes_out,"
+            // Header line ",bytes_in,bytes_out," marks sample boundaries
             if line.contains("bytes_in") {
+                sampleHeadersSeen += 1
+
+                if sampleHeadersSeen == 1 {
+                    // Start of initial bootstrap sample (cumulative totals from nettop)
+                    lastSampleTime = Date()
+                    currentIntervalBytesIn = 0
+                    currentIntervalBytesOut = 0
+                    activeProcessesInSample = 0
+                    continue
+                } else if sampleHeadersSeen == 2 {
+                    // End of bootstrap sample. Beginning of real delta streaming.
+                    lastSampleTime = Date()
+                    currentIntervalBytesIn = 0
+                    currentIntervalBytesOut = 0
+                    activeProcessesInSample = 0
+                    continue
+                }
+
                 // Sample boundary finished: calculate instantaneous bandwidth
                 let now = Date()
                 let elapsed = max(0.1, now.timeIntervalSince(lastSampleTime))
@@ -197,6 +221,10 @@ public final class NetworkCollector: @unchecked Sendable {
                 activeProcessesInSample = 0
                 continue
             }
+
+            // If we are still in the initial bootstrap sample (sampleHeadersSeen < 2),
+            // nettop outputs cumulative process totals from boot. Do NOT treat as delta.
+            guard sampleHeadersSeen >= 2 else { continue }
 
             // CSV format: <name>.<pid>,<bytes_in>,<bytes_out>,
             let columns = line.split(separator: ",", omittingEmptySubsequences: false)

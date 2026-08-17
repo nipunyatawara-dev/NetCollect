@@ -42,9 +42,35 @@ public final class AppUsageViewModel: ObservableObject {
         }
     }
 
+    @Published public var isSilentBackgroundMode: Bool = false {
+        didSet {
+            UserDefaults.standard.set(isSilentBackgroundMode, forKey: "netcollect_silent_bg_mode")
+            showMenuBarExtra = !isSilentBackgroundMode
+            updateActivationPolicy()
+        }
+    }
+
+    @Published public var showMenuBarExtra: Bool = true {
+        didSet {
+            UserDefaults.standard.set(showMenuBarExtra, forKey: "netcollect_show_menu_bar")
+        }
+    }
+
     @Published public var launchAtLogin: Bool = false {
         didSet {
             LaunchAtLoginService.shared.isEnabled = launchAtLogin
+        }
+    }
+
+    private var isHoverPrecisionActive: Bool = false
+
+    public func setHoverPrecision(active: Bool) {
+        guard isHoverPrecisionActive != active else { return }
+        isHoverPrecisionActive = active
+        if active {
+            NetworkCollector.shared.pollingMode = .highPrecision
+        } else {
+            NetworkCollector.shared.pollingMode = pollingMode
         }
     }
 
@@ -57,6 +83,12 @@ public final class AppUsageViewModel: ObservableObject {
             self.pollingMode = mode
         }
         self.isBackgroundOnly = UserDefaults.standard.bool(forKey: "netcollect_bg_only")
+        self.isSilentBackgroundMode = UserDefaults.standard.bool(forKey: "netcollect_silent_bg_mode")
+        if UserDefaults.standard.object(forKey: "netcollect_show_menu_bar") != nil {
+            self.showMenuBarExtra = UserDefaults.standard.bool(forKey: "netcollect_show_menu_bar") && !self.isSilentBackgroundMode
+        } else {
+            self.showMenuBarExtra = !self.isSilentBackgroundMode
+        }
         self.launchAtLogin = LaunchAtLoginService.shared.isEnabled
 
         setupCollector()
@@ -173,10 +205,26 @@ public final class AppUsageViewModel: ObservableObject {
     }
 
     public func updateActivationPolicy() {
-        if isBackgroundOnly {
+        if isSilentBackgroundMode {
+            let hasVisibleWindow = NSApp?.windows.contains(where: {
+                $0.isVisible && $0.canBecomeMain && !$0.isSheet && !(String(describing: type(of: $0)).contains("StatusBar"))
+            }) ?? false
+
+            if hasVisibleWindow {
+                NSApp?.setActivationPolicy(.regular)
+            } else {
+                NSApp?.setActivationPolicy(.accessory)
+            }
+        } else if isBackgroundOnly {
             NSApp?.setActivationPolicy(.accessory)
         } else {
             NSApp?.setActivationPolicy(.regular)
         }
+    }
+
+    public func quitApp() {
+        DatabaseService.shared.flushSync()
+        NetworkCollector.shared.stop()
+        NSApp?.terminate(nil)
     }
 }

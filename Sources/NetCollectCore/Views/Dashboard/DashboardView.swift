@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Main macOS dashboard window providing comprehensive network usage analytics.
+/// The primary macOS workspace for network usage and per-application activity.
 public struct DashboardView: View {
     @ObservedObject var viewModel: AppUsageViewModel
     @State private var showingSettings = false
@@ -11,280 +11,287 @@ public struct DashboardView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // MARK: - Header Bar
-            headerBar
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
-                .background(.ultraThinMaterial)
+            topBar
 
-            Divider()
-                .opacity(0.3)
-
-            // MARK: - Main Scrollable Content
-            ScrollView(.vertical, showsIndicators: true) {
+            ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 18) {
-                    // Hero Metrics Cards
                     heroMetricsGrid
-
-                    // Usage Trend Chart
-                    UsageChartView(
-                        points: viewModel.chartPoints,
-                        timeframe: viewModel.selectedTimeframe
-                    )
-
-                    // Applications List Section
+                    UsageChartView(points: viewModel.chartPoints, timeframe: viewModel.selectedTimeframe)
                     applicationsSection
                 }
-                .padding(20)
+                .padding(NetCollectDesign.contentPadding)
             }
         }
-        .frame(minWidth: 720, idealWidth: 850, minHeight: 560, idealHeight: 680)
-        .background(
-            ZStack {
-                Color(nsColor: .windowBackgroundColor)
-                    .opacity(0.8)
-                VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow)
-            }
-            .ignoresSafeArea()
-        )
+        .frame(minWidth: 760, idealWidth: 900, minHeight: 600, idealHeight: 720)
+        .background(NetCollectBackground())
         .sheet(isPresented: $showingSettings) {
             SettingsView(viewModel: viewModel)
         }
     }
 
-    // MARK: - Header Bar View
-    private var headerBar: some View {
-        HStack(spacing: 16) {
-            // App Identity (Left)
-            HStack(spacing: 8) {
-                Image(systemName: "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.accentColor)
-
-                Text("NetCollect")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(.primary)
-            }
-
-            Spacer()
-
-            // Centered Timeframe Segment Picker
+    private var topBar: some View {
+        ZStack {
+            // Centered Timeframe Toggle
             TimeframeSegmentPicker(selected: $viewModel.selectedTimeframe)
+                .frame(width: 290)
 
-            Spacer()
-
-            // Right: Live Speed Pill & Settings
-            HStack(spacing: 10) {
-                // Live Speed Pill Badge
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(viewModel.liveBandwidth.totalBytesPerSecond > 0 ? Color.accentColor : Color.secondary.opacity(0.4))
-                        .frame(width: 7, height: 7)
-                        .shadow(color: viewModel.liveBandwidth.totalBytesPerSecond > 0 ? Color.accentColor.opacity(0.6) : Color.clear, radius: 3)
-
-                    HStack(spacing: 5) {
-                        HStack(spacing: 2) {
-                            Image(systemName: "arrow.down")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(.accentColor)
-                            Text(viewModel.liveBandwidth.formattedInRate)
-                                .font(.system(size: 11, weight: .semibold))
-                                .monospacedDigit()
-                        }
-
-                        HStack(spacing: 2) {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(.secondary)
-                            Text(viewModel.liveBandwidth.formattedOutRate)
-                                .font(.system(size: 11, weight: .semibold))
-                                .monospacedDigit()
-                        }
+            HStack(spacing: 0) {
+                // Leading Brand & Date Range (left-aligned with content below)
+                HStack(spacing: 9) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(NetCollectDesign.accent.gradient)
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
                     }
-                    .foregroundColor(.primary)
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule()
-                        .fill(Color.primary.opacity(0.05))
-                        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-                )
+                    .frame(width: 28, height: 28)
 
-                // Settings Button
-                Button {
-                    showingSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .padding(7)
-                        .background(Circle().fill(Color.primary.opacity(0.05)))
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("NetCollect")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(viewModel.selectedTimeframe.rangeDescription())
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("Preferences")
+                .padding(.leading, NetCollectDesign.contentPadding)
+
+                Spacer(minLength: 12)
+
+                // Trailing Live Bandwidth & Settings
+                HStack(spacing: 8) {
+                    LiveSpeedBadgeView(viewModel: viewModel)
+
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)
+                            .background(Color.primary.opacity(0.055), in: Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(NetCollectPressStyle())
+                    .keyboardShortcut(",", modifiers: .command)
+                    .help("Settings")
+                }
+                .padding(.trailing, NetCollectDesign.contentPadding)
             }
+        }
+        .padding(.top, 18)
+        .padding(.bottom, 12)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            LinearGradient(
+                colors: [Color.primary.opacity(0.08), Color.clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 1)
         }
     }
 
-    // MARK: - Hero Metrics Grid
     private var heroMetricsGrid: some View {
         HStack(spacing: 14) {
             HeroMetricsCard(
-                title: "Total Data",
+                title: "Total usage",
                 value: viewModel.formattedTotalBytes,
                 subtitle: viewModel.selectedTimeframe.rangeDescription(),
-                iconName: "network",
-                accentColor: .accentColor
+                iconName: "arrow.up.arrow.down",
+                accentColor: NetCollectDesign.accent,
+                isProminent: true
             )
-
             HeroMetricsCard(
-                title: "Download",
+                title: "Downloaded",
                 value: viewModel.formattedTotalIn,
-                subtitle: "\(viewModel.activeAppsCount) active apps",
-                iconName: "arrow.down.circle.fill",
-                accentColor: .accentColor
+                subtitle: "Across \(viewModel.activeAppsCount) applications",
+                iconName: "arrow.down",
+                accentColor: NetCollectDesign.accent
             )
-
             HeroMetricsCard(
-                title: "Upload",
+                title: "Uploaded",
                 value: viewModel.formattedTotalOut,
-                subtitle: "Top: \(viewModel.topAppName)",
-                iconName: "arrow.up.circle.fill",
-                accentColor: .accentColor.opacity(0.85)
+                subtitle: "Highest: \(viewModel.topAppName)",
+                iconName: "arrow.up",
+                accentColor: .secondary
             )
         }
     }
 
-    // MARK: - Applications List Section
     private var applicationsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Controls Bar (Search, Category Filter, Sort)
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
-                // Section Title
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text("Applications")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.primary)
-                    Text("\(viewModel.filteredApps.count) apps tracked")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("\(viewModel.filteredApps.count) of \(viewModel.allRecords.count) shown")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
 
-                Spacer()
+                Spacer(minLength: 12)
+                searchField
 
-                // Search Bar
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-
-                    TextField("Search applications...", text: $viewModel.searchQuery)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-
-                    if !viewModel.searchQuery.isEmpty {
-                        Button {
-                            viewModel.searchQuery = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(0.04))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 0.5))
-                )
-                .frame(width: 180)
-
-                // Category Filter
                 Picker("Category", selection: $viewModel.categoryFilter) {
-                    ForEach(AppCategoryFilter.allCases) { cat in
-                        Label(cat.rawValue, systemImage: cat.iconName).tag(cat)
+                    ForEach(AppCategoryFilter.allCases) { category in
+                        Label(category.rawValue, systemImage: category.iconName).tag(category)
                     }
                 }
+                .labelsHidden()
                 .pickerStyle(.menu)
-                .frame(width: 125)
+                .frame(width: 116)
 
-                // Sort Option Menu
                 Picker("Sort", selection: $viewModel.sortOption) {
-                    ForEach(SortOption.allCases) { opt in
-                        Label(opt.rawValue, systemImage: opt.iconName).tag(opt)
+                    ForEach(SortOption.allCases) { option in
+                        Label(option.rawValue, systemImage: option.iconName).tag(option)
                     }
                 }
+                .labelsHidden()
                 .pickerStyle(.menu)
-                .frame(width: 135)
+                .frame(width: 126)
             }
 
-            // App List Card
             VStack(spacing: 0) {
                 if viewModel.filteredApps.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: viewModel.searchQuery.isEmpty ? "tray" : "magnifyingglass")
-                            .font(.system(size: 32))
-                            .foregroundColor(.secondary.opacity(0.4))
-                        Text(viewModel.searchQuery.isEmpty ? "No network usage recorded for this period." : "No matching applications found.")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 160)
+                    emptyApplicationsView
                 } else {
-                    LazyVStack(spacing: 2) {
+                    LazyVStack(spacing: 0) {
                         ForEach(viewModel.filteredApps) { record in
                             AppUsageRowView(record: record)
                             if record.id != viewModel.filteredApps.last?.id {
-                                Divider()
-                                    .opacity(0.2)
-                                    .padding(.leading, 64)
+                                Rectangle()
+                                    .fill(Color.primary.opacity(0.065))
+                                    .frame(height: 1)
+                                    .padding(.leading, 66)
                             }
                         }
                     }
                     .padding(.vertical, 6)
                 }
             }
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                    )
-            )
+            .netCollectSurface()
         }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField("Search", text: $viewModel.searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+
+            if !viewModel.searchQuery.isEmpty {
+                Button {
+                    viewModel.searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(NetCollectPressStyle())
+                .help("Clear search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(width: 166, height: 28)
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+        }
+    }
+
+    private var emptyApplicationsView: some View {
+        VStack(spacing: 9) {
+            Image(systemName: viewModel.searchQuery.isEmpty ? "tray" : "magnifyingglass")
+                .font(.system(size: 24, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(viewModel.searchQuery.isEmpty ? "No network activity yet" : "No matching applications")
+                .font(.system(size: 13, weight: .semibold))
+            Text(viewModel.searchQuery.isEmpty ? "Usage will appear here as applications connect." : "Try a different name or filter.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 150)
     }
 }
 
-/// Helper NSVisualEffectView wrapper for macOS translucent vibrancy behind windows.
-public struct VisualEffectView: NSViewRepresentable {
-    public let material: NSVisualEffectView.Material
-    public let blendingMode: NSVisualEffectView.BlendingMode
+/// Interactive live speed tile in the top right corner.
+/// On hover, splits into separate Download and Upload pills and triggers 1-second high-precision refresh.
+struct LiveSpeedBadgeView: View {
+    @ObservedObject var viewModel: AppUsageViewModel
+    @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(
-        material: NSVisualEffectView.Material = .contentBackground,
-        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
-    ) {
-        self.material = material
-        self.blendingMode = blendingMode
-    }
+    var body: some View {
+        HStack(spacing: 6) {
+            if isHovered {
+                // Download Speed Pill
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(NetCollectDesign.accent)
+                    Text(viewModel.liveBandwidth.formattedInRate)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                }
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(NetCollectDesign.accent.opacity(0.12), in: Capsule())
+                .transition(.asymmetric(
+                    insertion: .scale(scale: 0.88).combined(with: .opacity),
+                    removal: .scale(scale: 0.88).combined(with: .opacity)
+                ))
 
-    public func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
-        return view
-    }
-
-    public func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blendingMode
+                // Upload Speed Pill
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    Text(viewModel.liveBandwidth.formattedOutRate)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                }
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+                .transition(.asymmetric(
+                    insertion: .scale(scale: 0.88).combined(with: .opacity),
+                    removal: .scale(scale: 0.88).combined(with: .opacity)
+                ))
+            } else {
+                // Combined Total Speed Pill
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(viewModel.liveBandwidth.formattedTotalRate)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(Color.primary.opacity(0.055), in: Capsule())
+                .transition(.asymmetric(
+                    insertion: .scale(scale: 0.88).combined(with: .opacity),
+                    removal: .scale(scale: 0.88).combined(with: .opacity)
+                ))
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.86), value: isHovered)
+        .onHover { hovering in
+            isHovered = hovering
+            viewModel.setHoverPrecision(active: hovering)
+        }
+        .help("Live throughput: hover to view 1s live download and upload breakdown")
     }
 }

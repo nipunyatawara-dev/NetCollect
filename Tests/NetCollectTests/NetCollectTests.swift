@@ -25,6 +25,7 @@ struct NetCollectTestsRunner {
         testChartDataPointIdentity()
         testDatabaseServiceOperations()
         testAppResolverCleaning()
+        testSilentBackgroundModeSettings()
 
         print("\n==================================")
         print("Results: \(passedCount) Passed, \(failedCount) Failed")
@@ -55,15 +56,24 @@ struct NetCollectTestsRunner {
 
         let dailyInterval = TimeframeFilter.daily.dateInterval(for: now, calendar: calendar)
         assert(dailyInterval.start == calendar.startOfDay(for: now), "Daily interval starts at start of day")
-        assert(dailyInterval.end == now, "Daily interval ends at now")
+        assert(dailyInterval.end >= now, "Daily interval spans to end of day")
 
         let weeklyInterval = TimeframeFilter.weekly.dateInterval(for: now, calendar: calendar)
         assert(weeklyInterval.start <= now, "Weekly interval starts before or at now")
-        assert(weeklyInterval.end == now, "Weekly interval ends at now")
+        assert(weeklyInterval.end >= now, "Weekly interval spans to end of week")
 
         let monthlyInterval = TimeframeFilter.monthly.dateInterval(for: now, calendar: calendar)
         assert(monthlyInterval.start <= now, "Monthly interval starts before or at now")
-        assert(monthlyInterval.end == now, "Monthly interval ends at now")
+        assert(monthlyInterval.end >= now, "Monthly interval spans to end of month")
+
+        let dailyDesc = TimeframeFilter.daily.rangeDescription(for: now, calendar: calendar)
+        assert(dailyDesc.starts(with: "Today ("), "Daily description starts with 'Today ('")
+
+        let weeklyDesc = TimeframeFilter.weekly.rangeDescription(for: now, calendar: calendar)
+        assert(weeklyDesc.starts(with: "This Week ("), "Weekly description starts with 'This Week ('")
+
+        let monthlyDesc = TimeframeFilter.monthly.rangeDescription(for: now, calendar: calendar)
+        assert(monthlyDesc.starts(with: "This Month ("), "Monthly description starts with 'This Month ('")
     }
 
     static func testChartDataPointIdentity() {
@@ -140,6 +150,10 @@ struct NetCollectTestsRunner {
         assert(firstHourPoints.count == 1, "First hour contains no fabricated previous-day chart point")
         assert(firstHourPoints.first?.date == quietDay, "First hourly bucket starts at the requested day")
 
+        let fullDayEnd = calendar.date(byAdding: .day, value: 1, to: quietDay)!.addingTimeInterval(-1)
+        let fullDayPoints = db.fetchTimeSeries(from: quietDay, to: fullDayEnd, grouping: .hourly)
+        assert(fullDayPoints.count == 24, "Full day generates 24 hourly buckets")
+
         // Test Clear
         db.clearAllData()
         let clearedRecords = db.fetchUsage(from: startOfDay, to: testDate.addingTimeInterval(3600))
@@ -154,5 +168,26 @@ struct NetCollectTestsRunner {
 
         let info2 = resolver.resolve(pid: 99998, rawName: "mDNSResponder")
         assert(info2.isSystemProcess == true, "Identified mDNSResponder as system daemon")
+    }
+
+    static func testSilentBackgroundModeSettings() {
+        print("\n--- Testing Silent Background Mode Settings ---")
+        let vm = AppUsageViewModel.shared
+        let initialSilent = vm.isSilentBackgroundMode
+        let initialMenu = vm.showMenuBarExtra
+
+        // Enable silent background mode
+        vm.isSilentBackgroundMode = true
+        assert(UserDefaults.standard.bool(forKey: "netcollect_silent_bg_mode") == true, "Silent background mode persisted to UserDefaults")
+        assert(vm.showMenuBarExtra == false, "Menu bar extra is hidden when silent background mode is enabled")
+
+        // Disable silent background mode
+        vm.isSilentBackgroundMode = false
+        assert(UserDefaults.standard.bool(forKey: "netcollect_silent_bg_mode") == false, "Silent background mode disabled in UserDefaults")
+        assert(vm.showMenuBarExtra == true, "Menu bar extra is restored when silent background mode is disabled")
+
+        // Restore initial state
+        vm.isSilentBackgroundMode = initialSilent
+        vm.showMenuBarExtra = initialMenu
     }
 }

@@ -1,7 +1,7 @@
 import SwiftUI
 import Charts
 
-/// A robust, modern network activity trend chart with smooth curves and interactive hover inspection.
+/// Network activity with pointer inspection and accessible series controls.
 public struct UsageChartView: View {
     public let points: [ChartDataPoint]
     public let timeframe: TimeframeFilter
@@ -57,8 +57,8 @@ public struct UsageChartView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundColor(.accentColor)
 
-                        Text("Network Activity Trend")
-                            .font(.system(size: 13, weight: .semibold))
+                        Text("Activity")
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundColor(.primary)
                     }
 
@@ -95,8 +95,8 @@ public struct UsageChartView: View {
                         }
                         .transition(.opacity)
                     } else {
-                        Text(timeframe == .daily ? "24-hour activity distribution" : "Daily bandwidth breakdown")
-                            .font(.system(size: 11, weight: .regular))
+                        Text(timeframe == .daily ? "Hourly network usage" : "Daily network usage")
+                            .font(.system(size: 10, weight: .medium))
                             .foregroundColor(.secondary)
                     }
                 }
@@ -155,25 +155,6 @@ public struct UsageChartView: View {
 
             // MARK: - Swift Charts Canvas
             ZStack {
-                // Subtle Dot Grid Background
-                Canvas { context, size in
-                    let spacing: CGFloat = 18
-                    let radius: CGFloat = 1.0
-                    let color = NSColor.textColor.withAlphaComponent(0.08)
-
-                    var x: CGFloat = spacing / 2
-                    while x < size.width {
-                        var y: CGFloat = spacing / 2
-                        while y < size.height {
-                            let rect = CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)
-                            context.fill(Path(ellipseIn: rect), with: .color(Color(nsColor: color)))
-                            y += spacing
-                        }
-                        x += spacing
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
                 // Line & Area Marks
                 Chart {
                     ForEach(points) { point in
@@ -333,6 +314,7 @@ public struct UsageChartView: View {
                             }
                     }
                 }
+                .animation(.none, value: timeframe)
 
                 if !hasAnyTraffic {
                     VStack(spacing: 5) {
@@ -345,17 +327,10 @@ public struct UsageChartView: View {
                     .allowsHitTesting(false)
                 }
             }
-            .frame(height: 155)
+            .frame(height: 188)
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
+        .netCollectSurface()
         .onChange(of: timeframe) { _, _ in
             hoveredDate = nil
         }

@@ -4,6 +4,7 @@ import AppKit
 /// A sleek, Apple-designed row displaying network usage for an application.
 public struct AppUsageRowView: View {
     public let record: AppUsageRecord
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     public init(record: AppUsageRecord) {
@@ -24,10 +25,10 @@ public struct AppUsageRowView: View {
             Image(nsImage: appIcon)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 38, height: 38)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .frame(width: 36, height: 36)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
                 )
                 .shadow(color: Color.black.opacity(0.08), radius: 2, x: 0, y: 1)
@@ -74,7 +75,7 @@ public struct AppUsageRowView: View {
                             Capsule()
                                 .fill(Color.accentColor)
                                 .frame(width: max(4, geo.size.width * CGFloat(min(1.0, record.percentage))), height: 6)
-                                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: record.percentage)
+                                .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 1), value: record.percentage)
                         }
                     }
                     .frame(width: 80, height: 6)
@@ -125,7 +126,7 @@ public struct AppUsageRowView: View {
             .frame(width: 75, alignment: .trailing)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(isHovered ? Color.primary.opacity(0.04) : Color.clear)
@@ -136,7 +137,7 @@ public struct AppUsageRowView: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 1)) {
                 isHovered = hovering
             }
         }

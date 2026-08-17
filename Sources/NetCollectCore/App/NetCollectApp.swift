@@ -13,22 +13,22 @@ public struct NetCollectApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 850, height: 680)
+        .defaultSize(width: 900, height: 720)
 
         // Menu Bar Extra Status Item
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $viewModel.showMenuBarExtra) {
             MenuBarPopoverView(
                 viewModel: viewModel,
                 onOpenDashboard: {
                     AppDelegate.shared?.openDashboardWindow()
                 },
                 onQuit: {
-                    DatabaseService.shared.flushSync()
-                    NSApp.terminate(nil)
+                    AppDelegate.shared?.quitApp()
                 }
             )
         } label: {
-            Image(systemName: "antenna.radiowaves.left.and.right")
+            Image(systemName: "chart.bar.xaxis")
+                .accessibilityLabel("NetCollect network activity")
         }
         .menuBarExtraStyle(.window)
 

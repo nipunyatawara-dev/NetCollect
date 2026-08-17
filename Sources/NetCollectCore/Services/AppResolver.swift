@@ -40,17 +40,12 @@ public final class AppResolver: @unchecked Sendable {
             lock.unlock()
             return cached
         }
-        if let cached = nameCache[rawName] {
-            lock.unlock()
-            return cached
-        }
         lock.unlock()
 
         let resolved = performResolution(pid: pid, rawName: rawName)
 
         lock.lock()
         pidCache[pid] = resolved
-        nameCache[rawName] = resolved
         lock.unlock()
 
         return resolved
