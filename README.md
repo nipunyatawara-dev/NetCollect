@@ -38,13 +38,27 @@ Written in Swift using SwiftUI, Swift Charts, `nettop`, and SQLite.
 
 ---
 
-## Installation and running
+## Installation
 
-### Run the app bundle
+### Homebrew (Recommended)
+
 ```bash
-open NetCollect.app
+brew install --cask nipunyatawara-dev/tap/netcollect
 ```
-You can also drag `NetCollect.app` into `/Applications`.
+
+Or add the tap first:
+```bash
+brew tap nipunyatawara-dev/tap
+brew install --cask netcollect
+```
+
+### Direct Download (DMG)
+
+Download `NetCollect-v1.0.0.dmg` from the [Releases](https://github.com/nipunyatawara-dev/NetCollect/releases/latest) page, open the disk image, and drag `NetCollect.app` into your Applications folder.
+
+---
+
+## Development and building
 
 ### Run with Swift Package Manager
 ```bash
@@ -56,17 +70,15 @@ swift run NetCollect
 swift run NetCollectTests
 ```
 
----
-
-## Building from source
-
-Run the build script to compile the release binary and generate `NetCollect.app`:
-
+### Build release app bundle
 ```bash
 ./Scripts/build_app.sh
 ```
 
-The script compiles with `swift build -c release`, generates the app icon, and bundles everything into `NetCollect.app`.
+### Build release DMG
+```bash
+./Scripts/create_dmg.sh
+```
 
 ---
 
@@ -87,7 +99,8 @@ NetCollect/
 ├── Tests/
 │   └── NetCollectTests/             # Unit test suite
 └── Scripts/
-    ├── build_app.sh                 # Build and packaging script
+    ├── build_app.sh                 # App bundle packager
+    ├── create_dmg.sh                # DMG packager
     ├── create_icns.sh               # Icon converter
     └── generate_icon.swift          # Icon generation script
 ```
