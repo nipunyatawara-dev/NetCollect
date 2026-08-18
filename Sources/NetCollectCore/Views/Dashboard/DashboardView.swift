@@ -245,7 +245,6 @@ struct LiveSpeedBadgeView: View {
                     Text(viewModel.liveBandwidth.formattedInRate)
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                        .contentTransition(.numericText())
                 }
                 .padding(.horizontal, 9)
                 .frame(height: 28)
@@ -263,7 +262,6 @@ struct LiveSpeedBadgeView: View {
                     Text(viewModel.liveBandwidth.formattedOutRate)
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                        .contentTransition(.numericText())
                 }
                 .padding(.horizontal, 9)
                 .frame(height: 28)
@@ -281,7 +279,6 @@ struct LiveSpeedBadgeView: View {
                     Text(viewModel.liveBandwidth.formattedTotalRate)
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                        .contentTransition(.numericText())
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 28)

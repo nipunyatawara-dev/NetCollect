@@ -117,7 +117,6 @@ public struct MenuBarPopoverView: View {
                         .font(.system(size: 27, weight: .bold, design: .rounded))
                         .tracking(-0.5)
                         .monospacedDigit()
-                        .contentTransition(.numericText())
                 }
 
                 Spacer()

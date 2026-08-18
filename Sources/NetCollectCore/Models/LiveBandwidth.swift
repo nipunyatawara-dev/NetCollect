@@ -1,7 +1,7 @@
 import Foundation
 
 /// Real-time network throughput information.
-public struct LiveBandwidth: Sendable {
+public struct LiveBandwidth: Sendable, Equatable {
     public var bytesInPerSecond: Double
     public var bytesOutPerSecond: Double
     public var totalBytesPerSecond: Double { bytesInPerSecond + bytesOutPerSecond }

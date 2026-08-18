@@ -58,6 +58,7 @@ public final class NetworkCollector: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "com.netcollect.networkcollector", qos: .utility)
     private var isRunning = false
+    private var isUIVisibleState = false
 
     private var previousTotals: [pid_t: (bytesIn: UInt64, bytesOut: UInt64)] = [:]
     private var isBootstrapped = false
@@ -82,6 +83,23 @@ public final class NetworkCollector: @unchecked Sendable {
 
     deinit {
         stop()
+    }
+
+    /// Adapts the collection frequency based on whether UI is actively visible or in background.
+    public func setUIVisible(_ visible: Bool) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            guard self.isUIVisibleState != visible else { return }
+            self.isUIVisibleState = visible
+
+            if self.isRunning {
+                if visible {
+                    // Trigger immediate sample on UI open and switch to high-frequency timer
+                    self.performSample()
+                }
+                self.startTimer()
+            }
+        }
     }
 
     /// Starts the background network collection timer.
@@ -115,12 +133,21 @@ public final class NetworkCollector: @unchecked Sendable {
         }
     }
 
+    private var effectiveInterval: Double {
+        if isUIVisibleState {
+            return Double(pollingMode.intervalSeconds)
+        } else {
+            // When in background with no UI open, sample every 10 seconds to minimize CPU/battery wakeups
+            return 10.0
+        }
+    }
+
     private func startTimer() {
         stopTimer()
 
         let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
-        let interval = Double(pollingMode.intervalSeconds)
-        timer.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(100))
+        let interval = effectiveInterval
+        timer.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in
             self?.performSample()
         }
@@ -133,34 +160,64 @@ public final class NetworkCollector: @unchecked Sendable {
         timer = nil
     }
 
+    /// Executes nettop snapshot using lightweight C posix_spawnp avoiding Foundation Process overhead.
     private func performSample() {
-        let pipe = Pipe()
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
-        // -P: Per-process collapse
-        // -L 1: Single instantaneous snapshot (takes ~20ms and exits immediately, avoiding background thread spinning)
-        // -J bytes_in,bytes_out: Only extract bytes in and bytes out
-        // -n: No reverse DNS lookup (saves CPU and network)
-        proc.arguments = [
-            "-P",
-            "-L", "1",
-            "-J", "bytes_in,bytes_out",
-            "-n"
-        ]
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
+        var pipeFds: [Int32] = [0, 0]
+        guard pipe(&pipeFds) == 0 else { return }
 
-        do {
-            try proc.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            proc.waitUntilExit()
-            processSnapshotData(data)
-        } catch {
-            print("Failed to run nettop snapshot: \(error)")
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+        posix_spawn_file_actions_adddup2(&fileActions, pipeFds[1], STDOUT_FILENO)
+        posix_spawn_file_actions_addclose(&fileActions, pipeFds[0])
+
+        let devNull = open("/dev/null", O_WRONLY)
+        if devNull >= 0 {
+            posix_spawn_file_actions_adddup2(&fileActions, devNull, STDERR_FILENO)
         }
+
+        let args: [UnsafeMutablePointer<CChar>?] = [
+            strdup("nettop"),
+            strdup("-P"),
+            strdup("-L"),
+            strdup("1"),
+            strdup("-J"),
+            strdup("bytes_in,bytes_out"),
+            strdup("-n"),
+            nil
+        ]
+
+        var pid: pid_t = 0
+        let spawnStatus = posix_spawnp(&pid, "/usr/bin/nettop", &fileActions, nil, args, nil)
+        posix_spawn_file_actions_destroy(&fileActions)
+        close(pipeFds[1])
+        if devNull >= 0 { close(devNull) }
+
+        for arg in args where arg != nil {
+            free(arg)
+        }
+
+        guard spawnStatus == 0 else {
+            close(pipeFds[0])
+            return
+        }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let bytesRead = read(pipeFds[0], &buffer, buffer.count)
+            if bytesRead <= 0 { break }
+            data.append(buffer, count: bytesRead)
+        }
+        close(pipeFds[0])
+
+        var exitStatus: Int32 = 0
+        waitpid(pid, &exitStatus, 0)
+
+        processSnapshotData(data)
     }
 
     private func processSnapshotData(_ data: Data) {
+        guard !data.isEmpty else { return }
         guard let output = String(data: data, encoding: .utf8) else { return }
 
         let now = Date()

@@ -139,6 +139,7 @@ public final class AppUsageViewModel: ObservableObject {
     public func registerUIVisible() {
         activeUIRefCount += 1
         if activeUIRefCount == 1 {
+            NetworkCollector.shared.setUIVisible(true)
             loadUsageData()
             loadChartData()
             restartRefreshTimer()
@@ -149,6 +150,7 @@ public final class AppUsageViewModel: ObservableObject {
     public func unregisterUIVisible() {
         activeUIRefCount = max(0, activeUIRefCount - 1)
         if activeUIRefCount == 0 {
+            NetworkCollector.shared.setUIVisible(false)
             stopRefreshTimer()
         }
     }
@@ -177,8 +179,8 @@ public final class AppUsageViewModel: ObservableObject {
         NetworkCollector.shared.onBandwidthUpdated = { [weak self] bandwidth in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                // Only trigger SwiftUI object changes when UI is actively open/rendered
-                if self.isUIVisible {
+                // Only trigger SwiftUI object changes when UI is actively open/rendered and value changed
+                if self.isUIVisible && self.liveBandwidth != bandwidth {
                     self.liveBandwidth = bandwidth
                 }
             }
@@ -189,6 +191,7 @@ public final class AppUsageViewModel: ObservableObject {
         }
 
         NetworkCollector.shared.pollingMode = effectivePollingMode
+        NetworkCollector.shared.setUIVisible(isUIVisible)
         NetworkCollector.shared.start()
     }
 
@@ -196,7 +199,6 @@ public final class AppUsageViewModel: ObservableObject {
     public func loadUsageData() {
         let interval = selectedTimeframe.dateInterval()
         let records = DatabaseService.shared.fetchUsage(from: interval.start, to: interval.end)
-        self.allRecords = records
 
         var sumIn: UInt64 = 0
         var sumOut: UInt64 = 0
@@ -204,11 +206,17 @@ public final class AppUsageViewModel: ObservableObject {
             sumIn += r.bytesIn
             sumOut += r.bytesOut
         }
-        self.totalBytesIn = sumIn
-        self.totalBytesOut = sumOut
-        self.totalBytes = sumIn + sumOut
-        self.topAppName = records.first?.appName ?? "None"
-        self.activeAppsCount = records.count
+        let total = sumIn + sumOut
+        let topApp = records.first?.appName ?? "None"
+        let count = records.count
+
+        // Guard assignments to prevent spurious SwiftUI re-render passes when values haven't changed
+        if self.totalBytesIn != sumIn { self.totalBytesIn = sumIn }
+        if self.totalBytesOut != sumOut { self.totalBytesOut = sumOut }
+        if self.totalBytes != total { self.totalBytes = total }
+        if self.topAppName != topApp { self.topAppName = topApp }
+        if self.activeAppsCount != count { self.activeAppsCount = count }
+        if self.allRecords != records { self.allRecords = records }
     }
 
     public func loadChartData() {

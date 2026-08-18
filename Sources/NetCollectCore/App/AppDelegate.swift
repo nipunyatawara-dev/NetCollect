@@ -56,6 +56,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { _ in
             MainActor.assumeIsolated {
                 DatabaseService.shared.flushSync()
+                NetworkCollector.shared.stop()
+            }
+        }
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                NetworkCollector.shared.start()
             }
         }
     }

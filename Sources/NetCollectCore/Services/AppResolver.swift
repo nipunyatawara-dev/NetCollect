@@ -189,6 +189,7 @@ public final class AppResolver: @unchecked Sendable {
         }
 
         let finalImage = image ?? NSImage()
+        finalImage.size = NSSize(width: 32, height: 32)
         lock.lock()
         iconCache[bundleId] = finalImage
         lock.unlock()

@@ -53,6 +53,8 @@ public final class DatabaseService: @unchecked Sendable {
             // Enable WAL mode for high concurrency and performance
             execute(sql: "PRAGMA journal_mode=WAL;")
             execute(sql: "PRAGMA synchronous=NORMAL;")
+            execute(sql: "PRAGMA cache_size = -2000;")
+            execute(sql: "PRAGMA temp_store = MEMORY;")
         }
     }
 
