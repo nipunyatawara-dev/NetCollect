@@ -1,6 +1,29 @@
 import Foundation
 import NetCollectCore
 
+final class BandwidthRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [LiveBandwidth] = []
+
+    func record(_ sample: LiveBandwidth) {
+        lock.lock()
+        samples.append(sample)
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        samples.removeAll()
+        lock.unlock()
+    }
+
+    func downloadRates() -> [Double] {
+        lock.lock()
+        defer { lock.unlock() }
+        return samples.map(\.bytesInPerSecond)
+    }
+}
+
 @main
 @MainActor
 struct NetCollectTestsRunner {
@@ -18,6 +41,7 @@ struct NetCollectTestsRunner {
     }
 
     static func main() {
+        setenv("NETCOLLECT_DISABLE_SHARED_COLLECTION", "1", 1)
         print("🧪 Running NetCollect Test Suite...")
 
         testByteCountFormatter()
@@ -28,6 +52,9 @@ struct NetCollectTestsRunner {
         testSilentBackgroundModeSettings()
         testRefreshAndSamplingSettings()
         testUIVisibilityAndPowerEfficiency()
+        testSnapshotDeltaAccounting()
+        testInterfaceSpeedAccounting()
+        testSingleInstanceGuard()
         testLiveNetworkCollectorTracking()
 
         print("\n==================================")
@@ -41,13 +68,24 @@ struct NetCollectTestsRunner {
 
     static func testLiveNetworkCollectorTracking() {
         print("\n--- Testing Live NetworkCollector Tracking ---")
-        let collector = NetworkCollector.shared
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("live_collector_\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: dbURL)
+            try? FileManager.default.removeItem(atPath: dbURL.path + "-wal")
+            try? FileManager.default.removeItem(atPath: dbURL.path + "-shm")
+        }
+        let database = DatabaseService(databaseURL: dbURL)
+        let collector = NetworkCollector(databaseService: database)
+        let bandwidthRecorder = BandwidthRecorder()
+        collector.onBandwidthUpdated = { bandwidthRecorder.record($0) }
         collector.pollingMode = .oneSecond
         collector.setUIVisible(true)
-        collector.restart()
+        collector.start()
 
         // Wait for nettop to launch and complete baseline (blocks 0 & 1)
         Thread.sleep(forTimeInterval: 3.5)
+        bandwidthRecorder.reset()
 
         // Perform curl
         let curl = Process()
@@ -66,8 +104,8 @@ struct NetCollectTestsRunner {
         // Wait for sample interval to process deltas (block 2+)
         Thread.sleep(forTimeInterval: 4.0)
 
-        DatabaseService.shared.flushSync()
-        let records = DatabaseService.shared.fetchUsage(from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
+        database.flushSync()
+        let records = database.fetchUsage(from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
         print("  Fetched \(records.count) active apps from live tracking:")
         for r in records {
             print("    -> \(r.appName) (\(r.bundleId)): \(ByteCountFormatter.format(bytes: r.bytesIn)) in, \(ByteCountFormatter.format(bytes: r.bytesOut)) out")
@@ -76,8 +114,145 @@ struct NetCollectTestsRunner {
         assert(!records.isEmpty, "Live network tracking captured real process deltas")
         let total = records.reduce(0) { $0 + $1.totalBytes }
         assert(total > 0, "Total recorded delta bytes is greater than 0")
+        let curlDownload = records.first(where: { $0.bundleId == "system.curl" })?.bytesIn ?? 0
+        assert(curlDownload >= 800_000, "Collector captures most of a known 1 MB short-lived download")
+        assert(curlDownload <= 1_500_000, "Known 1 MB download cannot become a lifetime-counter spike")
+        let downloadRates = bandwidthRecorder.downloadRates()
+        print("  Observed interface download rates: \(downloadRates.map { ByteCountFormatter.formatRate(bytesPerSec: $0) })")
+        assert(downloadRates.contains(where: { $0 >= 100_000 }), "Physical-interface speed reacts to the known download")
+        assert(downloadRates.allSatisfy { $0 < 100_000_000 }, "Physical-interface speed cannot become a lifetime-counter spike")
 
+        collector.onBandwidthUpdated = nil
         collector.stop()
+    }
+
+    static func testSnapshotDeltaAccounting() {
+        print("\n--- Testing Snapshot Delta Accounting ---")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        var accumulator = NetworkSnapshotAccumulator(retentionInterval: 60)
+
+        let lifetimeBaseline = NetworkProcessSnapshot(
+            pid: 42,
+            rawName: "Browser Helper",
+            processStartIdentifier: 100,
+            bytesIn: 8_000_000_000,
+            bytesOut: 2_000_000_000
+        )
+        let initialDeltas = accumulator.consume([lifetimeBaseline], at: start)
+        assert(initialDeltas.isEmpty, "Initial lifetime counters establish a zero-usage baseline")
+
+        let nextSample = NetworkProcessSnapshot(
+            pid: 42,
+            rawName: "Browser Helper",
+            processStartIdentifier: 100,
+            bytesIn: 8_000_004_096,
+            bytesOut: 2_000_001_024
+        )
+        let nextDeltas = accumulator.consume([nextSample], at: start.addingTimeInterval(3))
+        assert(nextDeltas.count == 1, "A repeated process snapshot produces one delta")
+        assert(nextDeltas.first?.bytesIn == 4_096, "Download delta excludes the lifetime baseline")
+        assert(nextDeltas.first?.bytesOut == 1_024, "Upload delta excludes the lifetime baseline")
+        assert(nextDeltas.first?.observationInterval == 3, "Repeated-process speed uses its exact observation interval")
+
+        _ = accumulator.consume([], at: start.addingTimeInterval(6))
+        let reappearedSample = NetworkProcessSnapshot(
+            pid: 42,
+            rawName: "Browser Helper",
+            processStartIdentifier: 100,
+            bytesIn: 8_000_006_144,
+            bytesOut: 2_000_001_536
+        )
+        let reappearedDeltas = accumulator.consume([reappearedSample], at: start.addingTimeInterval(9))
+        assert(reappearedDeltas.first?.bytesIn == 2_048, "A temporarily missing process retains its download baseline")
+        assert(reappearedDeltas.first?.bytesOut == 512, "A temporarily missing process retains its upload baseline")
+        assert(reappearedDeltas.first?.observationInterval == 6, "Reappearing-process speed spans the full missing interval")
+
+        let newlyObserved = NetworkProcessSnapshot(
+            pid: 99,
+            rawName: "Uploader",
+            processStartIdentifier: 200,
+            bytesIn: 100_000,
+            bytesOut: 3_000_000_000
+        )
+        let newProcessDeltas = accumulator.consume([newlyObserved], at: start.addingTimeInterval(12))
+        assert(newProcessDeltas.isEmpty, "A newly observed process cannot inject lifetime counters")
+
+        let justLaunched = NetworkProcessSnapshot(
+            pid: 100,
+            rawName: "New Downloader",
+            processStartIdentifier: UInt64(start.addingTimeInterval(13).timeIntervalSince1970 * 1_000_000),
+            bytesIn: 750_000,
+            bytesOut: 25_000
+        )
+        let justLaunchedDeltas = accumulator.consume([justLaunched], at: start.addingTimeInterval(15))
+        assert(justLaunchedDeltas.first?.bytesIn == 750_000, "A process launched after the prior snapshot counts its initial download")
+        assert(justLaunchedDeltas.first?.bytesOut == 25_000, "A process launched after the prior snapshot counts its initial upload")
+
+        let reusedPID = NetworkProcessSnapshot(
+            pid: 99,
+            rawName: "Uploader",
+            processStartIdentifier: 201,
+            bytesIn: 7_000_000_000,
+            bytesOut: 4_000_000_000
+        )
+        let reusedPIDDeltas = accumulator.consume([reusedPID], at: start.addingTimeInterval(15))
+        assert(reusedPIDDeltas.isEmpty, "PID reuse establishes a new process baseline")
+
+        let rolledBack = NetworkProcessSnapshot(
+            pid: 99,
+            rawName: "Uploader",
+            processStartIdentifier: 201,
+            bytesIn: 10,
+            bytesOut: 20
+        )
+        let rollbackDeltas = accumulator.consume([rolledBack], at: start.addingTimeInterval(18))
+        assert(rollbackDeltas.isEmpty, "Counter rollback establishes a new zero-usage baseline")
+
+        let afterRollback = NetworkProcessSnapshot(
+            pid: 99,
+            rawName: "Uploader",
+            processStartIdentifier: 201,
+            bytesIn: 110,
+            bytesOut: 220
+        )
+        let afterRollbackDeltas = accumulator.consume([afterRollback], at: start.addingTimeInterval(21))
+        assert(afterRollbackDeltas.first?.bytesIn == 100, "Download resumes accurately after a counter reset")
+        assert(afterRollbackDeltas.first?.bytesOut == 200, "Upload resumes accurately after a counter reset")
+
+        var expiringAccumulator = NetworkSnapshotAccumulator(retentionInterval: 5)
+        _ = expiringAccumulator.consume([lifetimeBaseline], at: start)
+        let expiredDeltas = expiringAccumulator.consume([nextSample], at: start.addingTimeInterval(10))
+        assert(expiredDeltas.isEmpty, "An expired process baseline cannot create a delayed lifetime spike")
+    }
+
+    static func testSingleInstanceGuard() {
+        print("\n--- Testing Single Instance Guard ---")
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("netcollect-instance-\(UUID().uuidString).lock")
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let first = SingleInstanceGuard(lockURL: lockURL)
+        let second = SingleInstanceGuard(lockURL: lockURL)
+        assert(first.acquire(), "First application instance acquires the collector lock")
+        assert(!second.acquire(), "Second application instance is prevented from collecting")
+        first.release()
+        assert(second.acquire(), "Collector lock becomes available after the first instance exits")
+        second.release()
+    }
+
+    static func testInterfaceSpeedAccounting() {
+        print("\n--- Testing Interface Speed Accounting ---")
+        var accumulator = NetworkInterfaceAccumulator()
+        let baseline = [NetworkInterfaceSnapshot(name: "en0", bytesIn: 9_000_000_000, bytesOut: 4_000_000_000)]
+        assert(accumulator.consume(baseline, atUptime: 100) == nil, "Interface lifetime totals establish a speed baseline")
+
+        let next = [NetworkInterfaceSnapshot(name: "en0", bytesIn: 9_002_000_000, bytesOut: 4_000_500_000)]
+        let rate = accumulator.consume(next, atUptime: 102)
+        assert(rate?.bytesInPerSecond == 1_000_000, "Interface download speed uses counter delta over elapsed time")
+        assert(rate?.bytesOutPerSecond == 250_000, "Interface upload speed uses counter delta over elapsed time")
+
+        let reset = [NetworkInterfaceSnapshot(name: "en0", bytesIn: 10, bytesOut: 20)]
+        assert(accumulator.consume(reset, atUptime: 103) == nil, "Interface counter reset cannot create a speed spike")
     }
 
     static func testByteCountFormatter() {

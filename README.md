@@ -26,14 +26,14 @@ Written in Swift using SwiftUI, Swift Charts, `nettop`, and SQLite.
 - **Activity graph**: Interactive chart showing bandwidth over time with hover inspection.
 - **Menu bar and window modes**: Keep it in the menu bar for quick checks, or open the main window to search, filter by system/user apps, and sort by usage.
 - **Local storage**: Stores history in a local SQLite file at `~/Library/Application Support/NetCollect/netcollect.sqlite`. No data leaves your Mac.
-- **Low resource usage**: Uses less than 0.1% CPU in the background and under 25 MB of memory.
+- **Low resource usage**: Uses short-lived network snapshots instead of a continuously running sampler.
 
 ---
 
 ## Requirements
 
 - macOS 14.0 (Sonoma) or later
-- Apple Silicon or Intel Mac
+- Apple Silicon Mac
 - Xcode 15+ or Swift 6.0+ (to build from source)
 
 ---

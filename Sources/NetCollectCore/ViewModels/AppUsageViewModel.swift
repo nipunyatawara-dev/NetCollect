@@ -176,6 +176,10 @@ public final class AppUsageViewModel: ObservableObject {
     }
 
     private func setupCollector() {
+        guard ProcessInfo.processInfo.environment["NETCOLLECT_DISABLE_SHARED_COLLECTION"] != "1" else {
+            return
+        }
+
         NetworkCollector.shared.onBandwidthUpdated = { [weak self] bandwidth in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
