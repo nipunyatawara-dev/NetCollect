@@ -1,88 +1,109 @@
-# NetCollect 🌐
+# NetCollect
 
-A native, ultra-lightweight macOS application that monitors and aggregates per-application network data usage across **Daily (Today)**, **Weekly (This Week)**, and **Monthly (This Month)** timeframes.
+NetCollect is a macOS app that monitors network data usage per application. It tracks downloads and uploads across today, the current week, the current month, and all time.
 
-Built with **SwiftUI**, **Swift Charts**, Darwin kernel process accounting (`libproc`), and embedded **SQLite**, designed following Apple's fluid interface guidelines (`/apple-design`).
-
----
-
-## ✨ Features
-
-- **📊 Comprehensive Timeframe Analytics**: Toggle smoothly between **Today**, **This Week**, **This Month**, and **All Time**.
-- **⚡️ Real-Time Throughput**: Live upload and download speed meters (KB/s, MB/s) with a status indicator in the navigation bar and Menu Bar extra.
-- **📱 Per-Application Attribution**: Automatically consolidates background helpers (e.g. Chrome Renderers, Spotify Helpers) into their parent application bundle and displays native high-resolution app icons.
-- **📈 Interactive Network Activity Chart**: Visualizes network activity trends using Apple Swift Charts with smooth gradient area fills and hover inspection.
-- **🚀 Dual Foreground & Background Modes**:
-  - **Menu Bar Only (Background Mode)**: Completely hides from the Dock and Cmd-Tab switcher, running quietly in the macOS menu bar with negligible resource usage (< 0.1% CPU, < 25 MB RAM).
-  - **Full Dashboard (Foreground Mode)**: Rich macOS window with search, category filtering (User Apps vs System), and sorting (Total Usage, Download, Upload, Alphabetical).
-- **🗄 Embedded SQLite Persistence**: Batched in-memory writes to embedded SQLite database (`~/Library/Application Support/NetCollect/netcollect.sqlite`) ensure zero disk thrashing and instant queries.
-- **🎨 Apple Design Compliance**: Fluid spring animations (`dampingFraction: 0.85`), translucent materials (`.ultraThinMaterial`), optical typography tracking, and `.monospacedDigit()` for jitter-free numbers.
+Written in Swift using SwiftUI, Swift Charts, `nettop`, and SQLite.
 
 ---
 
-## 🛠 Project Structure
+## Preview
 
-```
-NetCollect/
-├── Package.swift                             # Swift Package configuration (macOS 14+)
-├── NetCollect.app/                           # Compiled standalone macOS Application Bundle
-├── Sources/
-│   ├── NetCollect/                           # Executable entrypoint (main.swift)
-│   └── NetCollectCore/                       # Core Framework
-│       ├── App/
-│       │   ├── NetCollectApp.swift           # SwiftUI App definition (MenuBarExtra & WindowGroup)
-│       │   └── AppDelegate.swift             # AppKit lifecycle & dynamic activation policy
-│       ├── Models/
-│       │   ├── AppUsageRecord.swift          # App usage data model & ByteCountFormatter
-│       │   ├── TimeframeFilter.swift         # Daily, Weekly, Monthly, All-Time intervals
-│       │   ├── LiveBandwidth.swift           # Real-time network speed metrics
-│       │   ├── ChartDataPoint.swift          # Time-series data points for Swift Charts
-│       │   └── FilterAndSortOptions.swift    # Category & sorting enums
-│       ├── Services/
-│       │   ├── NetworkCollector.swift        # Background nettop process streaming engine
-│       │   ├── AppResolver.swift             # PID -> App bundle & high-res icon resolver
-│       │   ├── DatabaseService.swift         # SQLite persistence for hourly & daily rollups
-│       │   └── LaunchAtLoginService.swift    # SMAppService helper for macOS login items
-│       ├── ViewModels/
-│       │   └── AppUsageViewModel.swift       # Observable state management
-│       └── Views/
-│           ├── Dashboard/
-│           │   ├── DashboardView.swift       # Main window view with glassmorphism design
-│           │   ├── HeroMetricsCard.swift     # Translucent summary metric cards
-│           │   ├── UsageChartView.swift      # Interactive Swift Charts breakdown
-│           │   ├── AppUsageRowView.swift     # Application row with icons, meters & stats
-│           │   └── TimeframeSegmentPicker.swift # Fluid animated spring segmented control
-│           ├── MenuBar/
-│           │   └── MenuBarPopoverView.swift  # Status bar quick-glance popover
-│           └── Settings/
-│               └── SettingsView.swift        # Preferences & background mode configuration
-├── Tests/
-│   └── NetCollectTests/                      # Automated test suite
-└── Scripts/
-    └── build_app.sh                          # Compiles release and builds NetCollect.app bundle
-```
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" width="760" alt="NetCollect Dashboard" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/menubar.png" width="360" alt="NetCollect Menu Bar Popover" />
+</p>
 
 ---
 
-## 🚀 Building & Running
+## Features
 
-### Option 1: Run the Standalone `.app`
+- **Timeframe tracking**: View usage by day, week, month, or total history.
+- **Live bandwidth speeds**: Shows current upload and download rates in the menu bar and dashboard window.
+- **App grouping**: Groups helper processes (like Chrome renderers or Spotify helpers) under their main application.
+- **Activity graph**: Interactive chart showing bandwidth over time with hover inspection.
+- **Menu bar and window modes**: Keep it in the menu bar for quick checks, or open the main window to search, filter by system/user apps, and sort by usage.
+- **Local storage**: Stores history in a local SQLite file at `~/Library/Application Support/NetCollect/netcollect.sqlite`. No data leaves your Mac.
+- **Low resource usage**: Uses less than 0.1% CPU in the background and under 25 MB of memory.
+
+---
+
+## Requirements
+
+- macOS 14.0 (Sonoma) or later
+- Apple Silicon or Intel Mac
+- Xcode 15+ or Swift 6.0+ (to build from source)
+
+---
+
+## Installation and running
+
+### Run the app bundle
 ```bash
 open NetCollect.app
 ```
-*(Or drag `NetCollect.app` into `/Applications`)*
+You can also drag `NetCollect.app` into `/Applications`.
 
-### Option 2: Run from Swift Package Manager
+### Run with Swift Package Manager
 ```bash
 swift run NetCollect
 ```
 
-### Option 3: Run the Test Suite
+### Run tests
 ```bash
 swift run NetCollectTests
 ```
 
-### Option 4: Recompile Release App Bundle
+---
+
+## Building from source
+
+Run the build script to compile the release binary and generate `NetCollect.app`:
+
 ```bash
 ./Scripts/build_app.sh
 ```
+
+The script compiles with `swift build -c release`, generates the app icon, and bundles everything into `NetCollect.app`.
+
+---
+
+## Project structure
+
+```
+NetCollect/
+├── Package.swift                    # Swift package manifest
+├── NetCollect.app/                  # Application bundle
+├── Sources/
+│   ├── NetCollect/                  # App entry point (main.swift)
+│   └── NetCollectCore/              # Application logic and UI
+│       ├── App/                     # App lifecycle and menu bar setup
+│       ├── Models/                  # Data types (records, bandwidth, chart points)
+│       ├── Services/                # Network collector (nettop), resolver, SQLite
+│       ├── ViewModels/              # App state
+│       └── Views/                   # Dashboard, menu bar popup, settings
+├── Tests/
+│   └── NetCollectTests/             # Unit test suite
+└── Scripts/
+    ├── build_app.sh                 # Build and packaging script
+    ├── create_icns.sh               # Icon converter
+    └── generate_icon.swift          # Icon generation script
+```
+
+---
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| <kbd>⌘</kbd> <kbd>,</kbd> | Open settings |
+| <kbd>⌘</kbd> <kbd>W</kbd> | Close dashboard window |
+| <kbd>⌘</kbd> <kbd>Q</kbd> | Quit NetCollect |
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
