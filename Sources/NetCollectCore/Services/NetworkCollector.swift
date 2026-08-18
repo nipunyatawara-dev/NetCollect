@@ -51,25 +51,22 @@ public struct NetworkDeltaEvent: Sendable {
     public let resolvedApp: ResolvedAppInfo
 }
 
-/// Ultra-lightweight background collector that streams process-level network statistics via nettop.
+/// Ultra-lightweight background collector that samples process-level network statistics via short-lived nettop snapshots.
 public final class NetworkCollector: @unchecked Sendable {
     public static let shared = NetworkCollector()
 
-    private var process: Process?
+    private var timer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "com.netcollect.networkcollector", qos: .utility)
     private var isRunning = false
     private var isUIVisibleState = false
 
-    private var lineBuffer = ""
-    private var lastSampleTime: Date = Date()
-    private var currentIntervalBytesIn: UInt64 = 0
-    private var currentIntervalBytesOut: UInt64 = 0
-    private var activeProcessesInSample = 0
+    private var previousTotals: [pid_t: (bytesIn: UInt64, bytesOut: UInt64)] = [:]
+    private var isBootstrapped = false
+    private var lastSampleTime = Date()
 
     private var peakInRate: Double = 0
     private var peakOutRate: Double = 0
 
-    // Callback on data collection
     public var onDeltaReceived: (@Sendable (NetworkDeltaEvent) -> Void)?
     public var onBandwidthUpdated: (@Sendable (LiveBandwidth) -> Void)?
 
@@ -87,281 +84,233 @@ public final class NetworkCollector: @unchecked Sendable {
         stop()
     }
 
-    /// Adapts collection frequency based on whether UI is visible or in background.
     public func setUIVisible(_ visible: Bool) {
         queue.async { [weak self] in
-            guard let self = self else { return }
-            guard self.isUIVisibleState != visible else { return }
+            guard let self, self.isUIVisibleState != visible else { return }
             self.isUIVisibleState = visible
 
             if self.isRunning {
-                self.launchNettop()
+                if visible {
+                    self.performSample()
+                }
+                self.startTimer()
             }
         }
     }
 
-    /// Starts the background network collection stream.
     public func start() {
         queue.async { [weak self] in
-            guard let self = self, !self.isRunning else { return }
+            guard let self, !self.isRunning else { return }
             self.isRunning = true
-            self.launchNettop()
+            self.performSample()
+            self.startTimer()
         }
     }
 
-    /// Stops the background collection stream.
     public func stop() {
         queue.async { [weak self] in
-            guard let self = self else { return }
+            guard let self else { return }
             self.isRunning = false
-            self.terminateProcess()
+            self.stopTimer()
+            self.previousTotals.removeAll()
+            self.isBootstrapped = false
         }
     }
 
-    /// Restarts collection.
     public func restart() {
         queue.async { [weak self] in
-            guard let self = self else { return }
-            self.terminateProcess()
+            guard let self else { return }
+            self.stopTimer()
             if self.isRunning {
-                self.launchNettop()
+                self.performSample()
+                self.startTimer()
             }
         }
     }
 
-    private var effectiveInterval: Int {
-        if isUIVisibleState {
-            return pollingMode.intervalSeconds
-        } else {
-            // When running in background with no UI open, sample every 10 seconds to save power
-            return 10
-        }
+    private var effectiveInterval: Double {
+        isUIVisibleState ? Double(pollingMode.intervalSeconds) : 10.0
     }
 
-    private var sampleBlockCount = 0
+    private func startTimer() {
+        stopTimer()
 
-    private var readSource: DispatchSourceRead?
-    private var masterFd: Int32 = -1
-    private var slaveFd: Int32 = -1
-    private var launchGeneration: UInt64 = 0
-
-    private func terminateProcess() {
-        // Invalidate termination handlers from every older nettop instance. A
-        // deliberate restart must not let the old process restart us again later.
-        launchGeneration &+= 1
-        if let proc = process, proc.isRunning {
-            proc.terminate()
+        let interval = effectiveInterval
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(
+            deadline: .now() + interval,
+            repeating: interval,
+            leeway: .milliseconds(interval >= 10 ? 500 : 200)
+        )
+        timer.setEventHandler { [weak self] in
+            self?.performSample()
         }
-        process = nil
-        if let src = readSource {
-            src.cancel()
-            readSource = nil
-        }
-        if masterFd >= 0 {
-            close(masterFd)
-            masterFd = -1
-        }
-        if slaveFd >= 0 {
-            close(slaveFd)
-            slaveFd = -1
-        }
-        lineBuffer = ""
-        sampleBlockCount = 0
-        currentIntervalBytesIn = 0
-        currentIntervalBytesOut = 0
-        activeProcessesInSample = 0
+        timer.resume()
+        self.timer = timer
     }
 
-    private func launchNettop() {
-        terminateProcess()
+    private func stopTimer() {
+        timer?.cancel()
+        timer = nil
+    }
 
-        var master: Int32 = -1
-        var slave: Int32 = -1
-        guard openpty(&master, &slave, nil, nil, nil) == 0 else {
-            print("Failed to open PTY for nettop")
+    /// Uses a short-lived snapshot because continuous nettop consumes an entire CPU core on macOS 26.
+    private func performSample() {
+        var pipeFds: [Int32] = [0, 0]
+        guard pipe(&pipeFds) == 0 else { return }
+
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+        posix_spawn_file_actions_adddup2(&fileActions, pipeFds[1], STDOUT_FILENO)
+        posix_spawn_file_actions_addclose(&fileActions, pipeFds[0])
+
+        let devNull = open("/dev/null", O_WRONLY)
+        if devNull >= 0 {
+            posix_spawn_file_actions_adddup2(&fileActions, devNull, STDERR_FILENO)
+        }
+
+        let args: [UnsafeMutablePointer<CChar>?] = [
+            strdup("nettop"),
+            strdup("-P"),
+            strdup("-L"),
+            strdup("1"),
+            strdup("-J"),
+            strdup("bytes_in,bytes_out"),
+            strdup("-n"),
+            strdup("-t"),
+            strdup("wifi"),
+            strdup("-t"),
+            strdup("wired"),
+            strdup("-t"),
+            strdup("expensive"),
+            nil
+        ]
+
+        var pid: pid_t = 0
+        let spawnStatus = posix_spawnp(&pid, "/usr/bin/nettop", &fileActions, nil, args, nil)
+        posix_spawn_file_actions_destroy(&fileActions)
+        close(pipeFds[1])
+        if devNull >= 0 { close(devNull) }
+
+        for arg in args where arg != nil {
+            free(arg)
+        }
+
+        guard spawnStatus == 0 else {
+            close(pipeFds[0])
             return
         }
-        self.masterFd = master
-        self.slaveFd = slave
 
-        let slaveHandle = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
-        // -P: Per-process collapse
-        // -L 0: Continuous delta streaming
-        // -J bytes_in,bytes_out: Only extract bytes in and bytes out
-        // -d: Exact kernel delta mode (accurately captures closed and open sockets)
-        // -n: No reverse DNS lookup (saves CPU and bandwidth)
-        // -c: Low CPU usage
-        // -t wifi -t wired -t expensive: ONLY monitor real network interfaces (excludes high-traffic local 127.0.0.1 IPC)
-        // -s <interval>: Polling interval
-        proc.arguments = [
-            "-P",
-            "-L", "0",
-            "-J", "bytes_in,bytes_out",
-            "-d",
-            "-n",
-            "-c",
-            "-t", "wifi",
-            "-t", "wired",
-            "-t", "expensive",
-            "-s", "\(effectiveInterval)"
-        ]
-        proc.standardOutput = slaveHandle
-        proc.standardError = FileHandle.nullDevice
-
-        let source = DispatchSource.makeReadSource(fileDescriptor: master, queue: self.queue)
-        source.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            var buffer = [UInt8](repeating: 0, count: 8192)
-            let bytesRead = read(master, &buffer, buffer.count)
-            if bytesRead > 0 {
-                let data = Data(buffer[0..<bytesRead])
-                self.processIncomingData(data)
-            }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let bytesRead = read(pipeFds[0], &buffer, buffer.count)
+            if bytesRead <= 0 { break }
+            data.append(buffer, count: bytesRead)
         }
-        source.resume()
-        self.readSource = source
+        close(pipeFds[0])
 
-        let generation = launchGeneration
-        let processIdentifier = ObjectIdentifier(proc)
-        proc.terminationHandler = { [weak self] _ in
-            guard let self = self else { return }
-            self.queue.async { [weak self] in
-                guard let strongSelf = self,
-                      strongSelf.isRunning,
-                      strongSelf.launchGeneration == generation,
-                      strongSelf.process.map(ObjectIdentifier.init) == processIdentifier else { return }
-                strongSelf.queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    guard let s = self,
-                          s.isRunning,
-                          s.launchGeneration == generation,
-                          s.process.map(ObjectIdentifier.init) == processIdentifier else { return }
-                    s.launchNettop()
-                }
-            }
-        }
+        var exitStatus: Int32 = 0
+        waitpid(pid, &exitStatus, 0)
 
-        do {
-            try proc.run()
-            self.process = proc
-            self.lastSampleTime = Date()
-            self.sampleBlockCount = 0
-        } catch {
-            print("Failed to run nettop: \(error)")
-        }
+        processSnapshotData(data)
     }
 
-    private func processIncomingData(_ data: Data) {
-        guard let chunk = String(data: data, encoding: .utf8) else { return }
-        // A PTY emits CRLF. Swift treats CRLF as a single grapheme, so looking
-        // for a standalone "\n" in the unnormalized String never finds a line.
-        lineBuffer += chunk
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+    private func processSnapshotData(_ data: Data) {
+        guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
 
-        while let newlineIndex = lineBuffer.firstIndex(of: "\n") {
-            let line = String(lineBuffer[..<newlineIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
-            lineBuffer.removeSubrange(...newlineIndex)
+        let now = Date()
+        let elapsed = max(0.1, now.timeIntervalSince(lastSampleTime))
+        lastSampleTime = now
 
-            guard !line.isEmpty else { continue }
+        var intervalBytesIn: UInt64 = 0
+        var intervalBytesOut: UInt64 = 0
+        var activeProcesses = 0
+        var currentPids = Set<pid_t>()
 
-            // Sample boundary indicator ",bytes_in,bytes_out,"
-            if line.contains("bytes_in") {
-                sampleBlockCount += 1
+        for rawLine in output.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, !line.contains("bytes_in") else { continue }
 
-                if sampleBlockCount == 1 {
-                    // First header: preceding block is empty, next block contains cumulative lifetime counts (baseline)
-                    currentIntervalBytesIn = 0
-                    currentIntervalBytesOut = 0
-                    activeProcessesInSample = 0
-                    continue
-                }
+            let columns = line.split(separator: ",", omittingEmptySubsequences: false)
+            guard columns.count >= 3,
+                  let currentIn = UInt64(columns[1]),
+                  let currentOut = UInt64(columns[2]) else { continue }
 
-                if sampleBlockCount == 2 {
-                    // Second header: baseline cumulative block finished. Real deltas begin now!
-                    lastSampleTime = Date()
-                    currentIntervalBytesIn = 0
-                    currentIntervalBytesOut = 0
-                    activeProcessesInSample = 0
-                    continue
-                }
+            let processIdentifier = String(columns[0])
+            guard let dotIndex = processIdentifier.lastIndex(of: "."),
+                  let pid = pid_t(processIdentifier[processIdentifier.index(after: dotIndex)...]) else { continue }
 
-                // Sample boundary finished: calculate instantaneous bandwidth
-                let now = Date()
-                let elapsed = max(0.1, now.timeIntervalSince(lastSampleTime))
-                let inRate = Double(currentIntervalBytesIn) / elapsed
-                let outRate = Double(currentIntervalBytesOut) / elapsed
+            let rawName = String(processIdentifier[..<dotIndex])
+            currentPids.insert(pid)
 
-                if inRate > peakInRate { peakInRate = inRate }
-                if outRate > peakOutRate { peakOutRate = outRate }
-
-                let bandwidth = LiveBandwidth(
-                    bytesInPerSecond: inRate,
-                    bytesOutPerSecond: outRate,
-                    peakInPerSecond: peakInRate,
-                    peakOutPerSecond: peakOutRate,
-                    activeProcessCount: activeProcessesInSample
-                )
-
-                self.onBandwidthUpdated?(bandwidth)
-
-                self.currentIntervalBytesIn = 0
-                self.currentIntervalBytesOut = 0
-                self.lastSampleTime = now
-                self.activeProcessesInSample = 0
+            if !isBootstrapped {
+                previousTotals[pid] = (currentIn, currentOut)
                 continue
             }
 
-            // Only process lines after the baseline block has finished (sampleBlockCount >= 2)
-            guard sampleBlockCount >= 2 else { continue }
-
-            // CSV format: <name>.<pid>,<bytes_in>,<bytes_out>,
-            let columns = line.split(separator: ",", omittingEmptySubsequences: false)
-            guard columns.count >= 3 else { continue }
-
-            let procIdentifier = String(columns[0])
-            guard let bytesIn = UInt64(columns[1]),
-                  let bytesOut = UInt64(columns[2]) else { continue }
-
-            if bytesIn > 0 || bytesOut > 0 {
-                guard let dotIndex = procIdentifier.lastIndex(of: ".") else { continue }
-                let pidString = String(procIdentifier[procIdentifier.index(after: dotIndex)...])
-                let rawName = String(procIdentifier[..<dotIndex])
-
-                guard let pid = pid_t(pidString) else { continue }
-                let resolved = AppResolver.shared.resolve(pid: pid, rawName: rawName)
-
-                // VPN packet tunnels and proxy extensions relay the originating
-                // app's payload. Including both processes doubles aggregate usage.
-                if !resolved.isTrafficRelay {
-                    activeProcessesInSample += 1
-                    currentIntervalBytesIn += bytesIn
-                    currentIntervalBytesOut += bytesOut
-                }
-
-                // Record into SQLite
-                DatabaseService.shared.recordUsage(
-                    date: Date(),
-                    bundleId: resolved.bundleId,
-                    appName: resolved.displayName,
-                    appPath: resolved.appPath,
-                    bytesIn: bytesIn,
-                    bytesOut: bytesOut,
-                    isSystem: resolved.isSystemProcess,
-                    isTrafficRelay: resolved.isTrafficRelay
-                )
-
-                let event = NetworkDeltaEvent(
-                    pid: pid,
-                    rawName: rawName,
-                    bytesIn: bytesIn,
-                    bytesOut: bytesOut,
-                    resolvedApp: resolved
-                )
-                self.onDeltaReceived?(event)
+            let deltaIn: UInt64
+            let deltaOut: UInt64
+            if let previous = previousTotals[pid] {
+                deltaIn = currentIn >= previous.bytesIn ? currentIn - previous.bytesIn : currentIn
+                deltaOut = currentOut >= previous.bytesOut ? currentOut - previous.bytesOut : currentOut
+            } else {
+                deltaIn = currentIn
+                deltaOut = currentOut
             }
+            previousTotals[pid] = (currentIn, currentOut)
+
+            guard deltaIn > 0 || deltaOut > 0 else { continue }
+
+            let resolved = AppResolver.shared.resolve(pid: pid, rawName: rawName)
+            if !resolved.isTrafficRelay {
+                activeProcesses += 1
+                intervalBytesIn += deltaIn
+                intervalBytesOut += deltaOut
+            }
+
+            DatabaseService.shared.recordUsage(
+                date: now,
+                bundleId: resolved.bundleId,
+                appName: resolved.displayName,
+                appPath: resolved.appPath,
+                bytesIn: deltaIn,
+                bytesOut: deltaOut,
+                isSystem: resolved.isSystemProcess,
+                isTrafficRelay: resolved.isTrafficRelay
+            )
+
+            onDeltaReceived?(NetworkDeltaEvent(
+                pid: pid,
+                rawName: rawName,
+                bytesIn: deltaIn,
+                bytesOut: deltaOut,
+                resolvedApp: resolved
+            ))
         }
+
+        let deadPids = Set(previousTotals.keys).subtracting(currentPids)
+        for deadPid in deadPids {
+            previousTotals.removeValue(forKey: deadPid)
+            AppResolver.shared.invalidatePID(deadPid)
+        }
+
+        guard isBootstrapped else {
+            isBootstrapped = true
+            return
+        }
+
+        let inRate = Double(intervalBytesIn) / elapsed
+        let outRate = Double(intervalBytesOut) / elapsed
+        peakInRate = max(peakInRate, inRate)
+        peakOutRate = max(peakOutRate, outRate)
+
+        onBandwidthUpdated?(LiveBandwidth(
+            bytesInPerSecond: inRate,
+            bytesOutPerSecond: outRate,
+            peakInPerSecond: peakInRate,
+            peakOutPerSecond: peakOutRate,
+            activeProcessCount: activeProcesses
+        ))
     }
 }
