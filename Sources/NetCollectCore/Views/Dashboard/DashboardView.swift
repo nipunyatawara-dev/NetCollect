@@ -26,6 +26,12 @@ public struct DashboardView: View {
         .sheet(isPresented: $viewModel.isShowingSettings) {
             SettingsView(viewModel: viewModel)
         }
+        .onAppear {
+            viewModel.registerUIVisible()
+        }
+        .onDisappear {
+            viewModel.unregisterUIVisible()
+        }
     }
 
     private var topBar: some View {

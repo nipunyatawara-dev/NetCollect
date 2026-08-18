@@ -27,6 +27,7 @@ struct NetCollectTestsRunner {
         testAppResolverCleaning()
         testSilentBackgroundModeSettings()
         testRefreshAndSamplingSettings()
+        testUIVisibilityAndPowerEfficiency()
 
         print("\n==================================")
         print("Results: \(passedCount) Passed, \(failedCount) Failed")
@@ -239,5 +240,28 @@ struct NetCollectTestsRunner {
         // Restore initial settings
         vm.dataRefreshInterval = initialRefresh
         vm.pollingMode = initialPolling
+    }
+
+    static func testUIVisibilityAndPowerEfficiency() {
+        print("\n--- Testing UI Visibility & Power Efficiency ---")
+        let vm = AppUsageViewModel.shared
+
+        assert(vm.isUIVisible == false, "Initial state has no active UI windows")
+
+        // Simulate Dashboard opening
+        vm.registerUIVisible()
+        assert(vm.isUIVisible == true, "isUIVisible is true after first UI surface appears")
+
+        // Simulate MenuBar opening concurrently
+        vm.registerUIVisible()
+        assert(vm.isUIVisible == true, "isUIVisible remains true when multiple UI surfaces appear")
+
+        // MenuBar closes
+        vm.unregisterUIVisible()
+        assert(vm.isUIVisible == true, "isUIVisible is still true because Dashboard is still open")
+
+        // Dashboard closes
+        vm.unregisterUIVisible()
+        assert(vm.isUIVisible == false, "isUIVisible is false when all UI surfaces close, suspending background UI timer")
     }
 }

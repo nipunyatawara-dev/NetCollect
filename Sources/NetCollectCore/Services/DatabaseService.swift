@@ -123,8 +123,8 @@ public final class DatabaseService: @unchecked Sendable {
         let elapsed = Date().timeIntervalSince(lastFlushTime)
         lock.unlock()
 
-        // Flush every 5 seconds or if buffer exceeds 50 items
-        if elapsed > 5.0 || count > 50 {
+        // Flush every 15 seconds or if buffer exceeds 50 items to minimize disk wakeups
+        if elapsed > 15.0 || count > 50 {
             flushAsync()
         }
     }

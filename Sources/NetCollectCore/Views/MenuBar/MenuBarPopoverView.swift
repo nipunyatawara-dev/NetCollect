@@ -44,6 +44,12 @@ public struct MenuBarPopoverView: View {
         }
         .frame(width: 340)
         .background(.ultraThinMaterial)
+        .onAppear {
+            viewModel.registerUIVisible()
+        }
+        .onDisappear {
+            viewModel.unregisterUIVisible()
+        }
     }
 
     private var header: some View {

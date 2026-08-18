@@ -72,6 +72,8 @@ public final class AppUsageViewModel: ObservableObject {
     }
 
     private var isHoverPrecisionActive: Bool = false
+    private var activeUIRefCount: Int = 0
+    public var isUIVisible: Bool { activeUIRefCount > 0 }
 
     public func setHoverPrecision(active: Bool) {
         guard isHoverPrecisionActive != active else { return }
@@ -79,11 +81,22 @@ public final class AppUsageViewModel: ObservableObject {
         if active {
             NetworkCollector.shared.pollingMode = .oneSecond
         } else {
-            NetworkCollector.shared.pollingMode = pollingMode
+            NetworkCollector.shared.pollingMode = effectivePollingMode
         }
     }
 
     private var refreshTimer: Timer?
+
+    private var isLowPowerModeEnabled: Bool {
+        ProcessInfo.processInfo.isLowPowerModeEnabled
+    }
+
+    private var effectivePollingMode: PollingMode {
+        if isLowPowerModeEnabled && (pollingMode == .oneSecond || pollingMode == .twoSeconds) {
+            return .eco
+        }
+        return pollingMode
+    }
 
     private init() {
         // Load preferences
@@ -103,35 +116,79 @@ public final class AppUsageViewModel: ObservableObject {
         }
         self.launchAtLogin = LaunchAtLoginService.shared.isEnabled
 
+        setupPowerStateObserver()
         setupCollector()
         loadUsageData()
         loadChartData()
+    }
 
-        restartRefreshTimer()
+    private func setupPowerStateObserver() {
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name.NSProcessInfoPowerStateDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self = self else { return }
+                NetworkCollector.shared.pollingMode = self.effectivePollingMode
+            }
+        }
+    }
+
+    /// Called when a view (Dashboard or MenuBar popover) appears on screen.
+    public func registerUIVisible() {
+        activeUIRefCount += 1
+        if activeUIRefCount == 1 {
+            loadUsageData()
+            loadChartData()
+            restartRefreshTimer()
+        }
+    }
+
+    /// Called when a view disappears from screen.
+    public func unregisterUIVisible() {
+        activeUIRefCount = max(0, activeUIRefCount - 1)
+        if activeUIRefCount == 0 {
+            stopRefreshTimer()
+        }
     }
 
     public func restartRefreshTimer() {
         refreshTimer?.invalidate()
+        refreshTimer = nil
+
+        guard isUIVisible else { return }
+
         refreshTimer = Timer.scheduledTimer(withTimeInterval: dataRefreshInterval.intervalSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.loadUsageData()
-                self?.loadChartData()
+                guard let self = self, self.isUIVisible else { return }
+                self.loadUsageData()
+                self.loadChartData()
             }
         }
+    }
+
+    public func stopRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
     }
 
     private func setupCollector() {
         NetworkCollector.shared.onBandwidthUpdated = { [weak self] bandwidth in
             Task { @MainActor [weak self] in
-                self?.liveBandwidth = bandwidth
+                guard let self = self else { return }
+                // Only trigger SwiftUI object changes when UI is actively open/rendered
+                if self.isUIVisible {
+                    self.liveBandwidth = bandwidth
+                }
             }
         }
 
         NetworkCollector.shared.onDeltaReceived = { _ in
-            // Delta received in background
+            // Delta logged directly to SQLite memory buffer in background
         }
 
-        NetworkCollector.shared.pollingMode = pollingMode
+        NetworkCollector.shared.pollingMode = effectivePollingMode
         NetworkCollector.shared.start()
     }
 
