@@ -61,4 +61,8 @@ cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
 </plist>
 EOF
 
+echo "🖊️  Ad-hoc signing NetCollect.app bundle..."
+codesign --force --deep --sign - "$APP_BUNDLE"
+codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+
 echo "✨ NetCollect.app successfully created with AppIcon at $APP_BUNDLE"
