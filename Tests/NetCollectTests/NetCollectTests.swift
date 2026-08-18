@@ -28,6 +28,7 @@ struct NetCollectTestsRunner {
         testSilentBackgroundModeSettings()
         testRefreshAndSamplingSettings()
         testUIVisibilityAndPowerEfficiency()
+        testLiveNetworkCollectorTracking()
 
         print("\n==================================")
         print("Results: \(passedCount) Passed, \(failedCount) Failed")
@@ -36,6 +37,47 @@ struct NetCollectTestsRunner {
         if failedCount > 0 {
             exit(1)
         }
+    }
+
+    static func testLiveNetworkCollectorTracking() {
+        print("\n--- Testing Live NetworkCollector Tracking ---")
+        let collector = NetworkCollector.shared
+        collector.pollingMode = .oneSecond
+        collector.setUIVisible(true)
+        collector.restart()
+
+        // Wait for nettop to launch and complete baseline (blocks 0 & 1)
+        Thread.sleep(forTimeInterval: 3.5)
+
+        // Perform curl
+        let curl = Process()
+        curl.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        // Keep the transfer alive across at least one one-second nettop boundary;
+        // very small downloads can open and close entirely between samples.
+        curl.arguments = [
+            "-s",
+            "--limit-rate", "512K",
+            "-o", "/dev/null",
+            "https://speed.cloudflare.com/__down?bytes=1048576"
+        ]
+        try? curl.run()
+        curl.waitUntilExit()
+
+        // Wait for sample interval to process deltas (block 2+)
+        Thread.sleep(forTimeInterval: 4.0)
+
+        DatabaseService.shared.flushSync()
+        let records = DatabaseService.shared.fetchUsage(from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
+        print("  Fetched \(records.count) active apps from live tracking:")
+        for r in records {
+            print("    -> \(r.appName) (\(r.bundleId)): \(ByteCountFormatter.format(bytes: r.bytesIn)) in, \(ByteCountFormatter.format(bytes: r.bytesOut)) out")
+        }
+
+        assert(!records.isEmpty, "Live network tracking captured real process deltas")
+        let total = records.reduce(0) { $0 + $1.totalBytes }
+        assert(total > 0, "Total recorded delta bytes is greater than 0")
+
+        collector.stop()
     }
 
     static func testByteCountFormatter() {
@@ -121,6 +163,19 @@ struct NetCollectTestsRunner {
             isSystem: false
         )
 
+        // A packet tunnel sees App A and App B's payload again. It is retained in
+        // storage for diagnostics but must not inflate aggregate usage.
+        db.recordUsage(
+            date: testDate,
+            bundleId: "com.example.vpn.PacketTunnel",
+            appName: "PacketTunnel",
+            appPath: "/Applications/ExampleVPN.app/Contents/PlugIns/PacketTunnel.appex",
+            bytesIn: 40_000_000,
+            bytesOut: 2_500_000,
+            isSystem: true,
+            isTrafficRelay: true
+        )
+
         db.flushSync()
 
         let calendar = Calendar.current
@@ -170,6 +225,10 @@ struct NetCollectTestsRunner {
 
         let info2 = resolver.resolve(pid: 99998, rawName: "mDNSResponder")
         assert(info2.isSystemProcess == true, "Identified mDNSResponder as system daemon")
+
+        assert(AppResolver.isTrafficRelayExtensionPoint("com.apple.networkextension.packet-tunnel"), "Identified packet tunnel as a traffic relay")
+        assert(AppResolver.isTrafficRelayExtensionPoint("com.apple.networkextension.app-proxy"), "Identified app proxy as a traffic relay")
+        assert(!AppResolver.isTrafficRelayExtensionPoint("com.apple.Safari.content-blocker"), "Did not classify unrelated extensions as traffic relays")
     }
 
     static func testSilentBackgroundModeSettings() {

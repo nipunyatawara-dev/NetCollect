@@ -21,6 +21,7 @@ public final class DatabaseService: @unchecked Sendable {
         var bytesIn: UInt64
         var bytesOut: UInt64
         var isSystem: Bool
+        var isTrafficRelay: Bool
     }
     private var writeBuffer: [String: PendingUsage] = [:] // key: "\(timestamp_hour)_\(bundleId)"
     private var lastFlushTime: Date = Date()
@@ -68,12 +69,35 @@ public final class DatabaseService: @unchecked Sendable {
             bytes_in INTEGER NOT NULL DEFAULT 0,
             bytes_out INTEGER NOT NULL DEFAULT 0,
             is_system INTEGER NOT NULL DEFAULT 0,
+            is_traffic_relay INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (timestamp_hour, bundle_id)
         );
         CREATE INDEX IF NOT EXISTS idx_hourly_ts ON hourly_usage(timestamp_hour);
         CREATE INDEX IF NOT EXISTS idx_hourly_bundle ON hourly_usage(bundle_id);
         """
         execute(sql: createTableSQL)
+
+        // Existing v1 databases predate relay classification.
+        if !tableHasColumn(table: "hourly_usage", column: "is_traffic_relay") {
+            execute(sql: "ALTER TABLE hourly_usage ADD COLUMN is_traffic_relay INTEGER NOT NULL DEFAULT 0;")
+        }
+    }
+
+    private func tableHasColumn(table: String, column: String) -> Bool {
+        guard let db else { return false }
+        var statement: OpaquePointer?
+        var found = false
+
+        if sqlite3_prepare_v2(db, "PRAGMA table_info(\(table));", -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let nameText = sqlite3_column_text(statement, 1), String(cString: nameText) == column {
+                    found = true
+                    break
+                }
+            }
+        }
+        sqlite3_finalize(statement)
+        return found
     }
 
     private func execute(sql: String) {
@@ -95,7 +119,8 @@ public final class DatabaseService: @unchecked Sendable {
         appPath: String?,
         bytesIn: UInt64,
         bytesOut: UInt64,
-        isSystem: Bool
+        isSystem: Bool,
+        isTrafficRelay: Bool = false
     ) {
         guard bytesIn > 0 || bytesOut > 0 else { return }
 
@@ -110,6 +135,7 @@ public final class DatabaseService: @unchecked Sendable {
         if var existing = writeBuffer[bufferKey] {
             existing.bytesIn += bytesIn
             existing.bytesOut += bytesOut
+            existing.isTrafficRelay = existing.isTrafficRelay || isTrafficRelay
             writeBuffer[bufferKey] = existing
         } else {
             writeBuffer[bufferKey] = PendingUsage(
@@ -117,7 +143,8 @@ public final class DatabaseService: @unchecked Sendable {
                 appPath: appPath,
                 bytesIn: bytesIn,
                 bytesOut: bytesOut,
-                isSystem: isSystem
+                isSystem: isSystem,
+                isTrafficRelay: isTrafficRelay
             )
         }
 
@@ -125,8 +152,8 @@ public final class DatabaseService: @unchecked Sendable {
         let elapsed = Date().timeIntervalSince(lastFlushTime)
         lock.unlock()
 
-        // Flush every 15 seconds or if buffer exceeds 50 items to minimize disk wakeups
-        if elapsed > 15.0 || count > 50 {
+        // Flush every 5 seconds or if buffer exceeds 20 items to ensure prompt disk persistence
+        if elapsed > 5.0 || count > 20 {
             flushAsync()
         }
     }
@@ -162,16 +189,18 @@ public final class DatabaseService: @unchecked Sendable {
         execute(sql: "BEGIN TRANSACTION;")
 
         let upsertSQL = """
-        INSERT INTO hourly_usage (timestamp_hour, bundle_id, app_name, app_path, bytes_in, bytes_out, is_system)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO hourly_usage (timestamp_hour, bundle_id, app_name, app_path, bytes_in, bytes_out, is_system, is_traffic_relay)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(timestamp_hour, bundle_id) DO UPDATE SET
             bytes_in = bytes_in + excluded.bytes_in,
             bytes_out = bytes_out + excluded.bytes_out,
             app_name = CASE WHEN excluded.app_name != '' THEN excluded.app_name ELSE hourly_usage.app_name END,
             app_path = CASE WHEN excluded.app_path IS NOT NULL THEN excluded.app_path ELSE hourly_usage.app_path END,
-            is_system = MAX(hourly_usage.is_system, excluded.is_system);
+            is_system = MAX(hourly_usage.is_system, excluded.is_system),
+            is_traffic_relay = MAX(hourly_usage.is_traffic_relay, excluded.is_traffic_relay);
         """
 
+        let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, upsertSQL, -1, &statement, nil) == SQLITE_OK {
             for (key, usage) in pending {
@@ -180,21 +209,28 @@ public final class DatabaseService: @unchecked Sendable {
                 let bundleId = String(parts[1])
 
                 sqlite3_bind_int64(statement, 1, ts)
-                sqlite3_bind_text(statement, 2, (bundleId as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(statement, 3, (usage.appName as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(statement, 2, (bundleId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(statement, 3, (usage.appName as NSString).utf8String, -1, SQLITE_TRANSIENT)
                 if let path = usage.appPath {
-                    sqlite3_bind_text(statement, 4, (path as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(statement, 4, (path as NSString).utf8String, -1, SQLITE_TRANSIENT)
                 } else {
                     sqlite3_bind_null(statement, 4)
                 }
                 sqlite3_bind_int64(statement, 5, Int64(usage.bytesIn))
                 sqlite3_bind_int64(statement, 6, Int64(usage.bytesOut))
                 sqlite3_bind_int(statement, 7, usage.isSystem ? 1 : 0)
+                sqlite3_bind_int(statement, 8, usage.isTrafficRelay ? 1 : 0)
 
-                sqlite3_step(statement)
+                if sqlite3_step(statement) != SQLITE_DONE {
+                    let errmsg = String(cString: sqlite3_errmsg(db))
+                    print("Error inserting hourly_usage: \(errmsg)")
+                }
                 sqlite3_reset(statement)
             }
             sqlite3_finalize(statement)
+        } else {
+            let errmsg = String(cString: sqlite3_errmsg(db))
+            print("Error preparing upsertSQL: \(errmsg)")
         }
 
         execute(sql: "COMMIT;")
@@ -218,7 +254,7 @@ public final class DatabaseService: @unchecked Sendable {
                 SUM(bytes_out) as total_out,
                 MAX(is_system) as is_system
             FROM hourly_usage
-            WHERE timestamp_hour >= ? AND timestamp_hour <= ?
+            WHERE timestamp_hour >= ? AND timestamp_hour <= ? AND is_traffic_relay = 0
             GROUP BY bundle_id
             ORDER BY (total_in + total_out) DESC;
             """
@@ -286,7 +322,7 @@ public final class DatabaseService: @unchecked Sendable {
                 SUM(bytes_in) as total_in,
                 SUM(bytes_out) as total_out
             FROM hourly_usage
-            WHERE timestamp_hour >= ? AND timestamp_hour <= ?
+            WHERE timestamp_hour >= ? AND timestamp_hour <= ? AND is_traffic_relay = 0
             GROUP BY timestamp_hour
             ORDER BY timestamp_hour ASC;
             """

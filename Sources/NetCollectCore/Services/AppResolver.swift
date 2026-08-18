@@ -8,17 +8,20 @@ public struct ResolvedAppInfo: Sendable, Hashable {
     public let displayName: String
     public let appPath: String?
     public let isSystemProcess: Bool
+    public let isTrafficRelay: Bool
 
     public init(
         bundleId: String,
         displayName: String,
         appPath: String? = nil,
-        isSystemProcess: Bool = false
+        isSystemProcess: Bool = false,
+        isTrafficRelay: Bool = false
     ) {
         self.bundleId = bundleId
         self.displayName = displayName
         self.appPath = appPath
         self.isSystemProcess = isSystemProcess
+        self.isTrafficRelay = isTrafficRelay
     }
 }
 
@@ -58,11 +61,13 @@ public final class AppResolver: @unchecked Sendable {
             let name = runningApp.localizedName ?? cleanProcessName(rawName)
             let path = runningApp.bundleURL?.path
             let isSystem = isSystemPath(path) || bundleId.starts(with: "com.apple.")
+            let isTrafficRelay = path.map(isTrafficRelayBundle(at:)) ?? false
             return ResolvedAppInfo(
                 bundleId: bundleId,
                 displayName: name,
                 appPath: path,
-                isSystemProcess: isSystem
+                isSystemProcess: isSystem,
+                isTrafficRelay: isTrafficRelay
             )
         }
 
@@ -74,6 +79,25 @@ public final class AppResolver: @unchecked Sendable {
                 String(cString: ptr.baseAddress!)
             }
             if !execPath.isEmpty {
+                // Packet tunnels and application/transparent proxies see the same
+                // payload once more while relaying it. Keep them identifiable, but
+                // mark them so aggregate usage does not count both layers.
+                if let extensionPath = findTrafficRelayBundle(in: execPath) {
+                    let bundle = Bundle(path: extensionPath)
+                    let bundleId = bundle?.bundleIdentifier ?? "relay.\(rawName)"
+                    let name = bundle?.infoDictionary?["CFBundleDisplayName"] as? String
+                        ?? bundle?.infoDictionary?["CFBundleName"] as? String
+                        ?? cleanProcessName(rawName)
+
+                    return ResolvedAppInfo(
+                        bundleId: bundleId,
+                        displayName: name,
+                        appPath: extensionPath,
+                        isSystemProcess: true,
+                        isTrafficRelay: true
+                    )
+                }
+
                 if let appBundlePath = findAppBundle(in: execPath) {
                     let bundle = Bundle(path: appBundlePath)
                     let bundleId = bundle?.bundleIdentifier ?? "app.\(rawName)"
@@ -130,6 +154,38 @@ public final class AppResolver: @unchecked Sendable {
         }
 
         return bestAppBundle
+    }
+
+    private func findTrafficRelayBundle(in executablePath: String) -> String? {
+        var currentURL = URL(fileURLWithPath: executablePath)
+
+        while currentURL.pathComponents.count > 1 {
+            let packageExtension = currentURL.pathExtension.lowercased()
+            if (packageExtension == "appex" || packageExtension == "systemextension"),
+               isTrafficRelayBundle(at: currentURL.path) {
+                return currentURL.path
+            }
+            currentURL.deleteLastPathComponent()
+        }
+
+        return nil
+    }
+
+    private func isTrafficRelayBundle(at path: String) -> Bool {
+        guard let extensionInfo = Bundle(path: path)?.infoDictionary?["NSExtension"] as? [String: Any],
+              let pointIdentifier = extensionInfo["NSExtensionPointIdentifier"] as? String else {
+            return false
+        }
+        return Self.isTrafficRelayExtensionPoint(pointIdentifier)
+    }
+
+    /// Returns whether a Network Extension relays application payloads and would
+    /// therefore duplicate those bytes in a process-level aggregate.
+    public static func isTrafficRelayExtensionPoint(_ identifier: String) -> Bool {
+        let normalized = identifier.lowercased()
+        return normalized.contains("packet-tunnel")
+            || normalized.contains("app-proxy")
+            || normalized.contains("transparent-proxy")
     }
 
     private func isSystemPath(_ path: String?) -> Bool {

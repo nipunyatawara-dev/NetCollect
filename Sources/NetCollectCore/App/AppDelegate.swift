@@ -16,6 +16,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
+        _ = AppUsageViewModel.shared
 
         // Observe window close notifications to update Dock / background presence
         NotificationCenter.default.addObserver(
