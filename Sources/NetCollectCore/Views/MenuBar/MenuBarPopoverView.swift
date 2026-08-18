@@ -6,15 +6,18 @@ public struct MenuBarPopoverView: View {
     @ObservedObject var viewModel: AppUsageViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public var onOpenDashboard: () -> Void
+    public var onOpenSettings: () -> Void
     public var onQuit: () -> Void
 
     public init(
         viewModel: AppUsageViewModel = .shared,
         onOpenDashboard: @escaping () -> Void = {},
+        onOpenSettings: @escaping () -> Void = {},
         onQuit: @escaping () -> Void = {}
     ) {
         self.viewModel = viewModel
         self.onOpenDashboard = onOpenDashboard
+        self.onOpenSettings = onOpenSettings
         self.onQuit = onQuit
     }
 
@@ -66,8 +69,7 @@ public struct MenuBarPopoverView: View {
 
             Menu {
                 Button {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                    NSApp.activate(ignoringOtherApps: true)
+                    onOpenSettings()
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
                 }
@@ -221,16 +223,16 @@ public struct MenuBarPopoverView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.primary.opacity(0.055))
-                        Capsule()
-                            .fill(NetCollectDesign.accent.opacity(0.72))
-                            .frame(width: max(3, geometry.size.width * CGFloat(min(1, record.percentage))))
-                            .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 1), value: record.percentage)
+                Capsule()
+                    .fill(Color.primary.opacity(0.055))
+                    .frame(height: 3)
+                    .overlay(alignment: .leading) {
+                        GeometryReader { geometry in
+                            Capsule()
+                                .fill(NetCollectDesign.accent.opacity(0.72))
+                                .frame(width: max(3, geometry.size.width * CGFloat(min(1, record.percentage))))
+                        }
                     }
-                }
-                .frame(height: 3)
             }
         }
         .padding(.horizontal, 8)

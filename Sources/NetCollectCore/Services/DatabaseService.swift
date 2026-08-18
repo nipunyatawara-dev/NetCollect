@@ -132,12 +132,18 @@ public final class DatabaseService: @unchecked Sendable {
     /// Asynchronously flushes the in-memory write buffer to SQLite.
     public func flushAsync() {
         dbQueue.async { [weak self] in
-            self?.flushSync()
+            self?.flushSyncInternal()
         }
     }
 
     /// Synchronously writes pending usage to disk in a single transaction.
     public func flushSync() {
+        dbQueue.sync {
+            self.flushSyncInternal()
+        }
+    }
+
+    private func flushSyncInternal() {
         lock.lock()
         guard !writeBuffer.isEmpty else {
             lastFlushTime = Date()
@@ -159,18 +165,19 @@ public final class DatabaseService: @unchecked Sendable {
         ON CONFLICT(timestamp_hour, bundle_id) DO UPDATE SET
             bytes_in = bytes_in + excluded.bytes_in,
             bytes_out = bytes_out + excluded.bytes_out,
-            app_name = excluded.app_name,
-            app_path = COALESCE(excluded.app_path, hourly_usage.app_path);
+            app_name = CASE WHEN excluded.app_name != '' THEN excluded.app_name ELSE hourly_usage.app_name END,
+            app_path = CASE WHEN excluded.app_path IS NOT NULL THEN excluded.app_path ELSE hourly_usage.app_path END,
+            is_system = MAX(hourly_usage.is_system, excluded.is_system);
         """
 
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, upsertSQL, -1, &statement, nil) == SQLITE_OK {
             for (key, usage) in pending {
                 let parts = key.split(separator: "|")
-                guard parts.count == 2, let tsHour = Int64(parts[0]) else { continue }
+                guard parts.count == 2, let ts = Int64(parts[0]) else { continue }
                 let bundleId = String(parts[1])
 
-                sqlite3_bind_int64(statement, 1, tsHour)
+                sqlite3_bind_int64(statement, 1, ts)
                 sqlite3_bind_text(statement, 2, (bundleId as NSString).utf8String, -1, nil)
                 sqlite3_bind_text(statement, 3, (usage.appName as NSString).utf8String, -1, nil)
                 if let path = usage.appPath {
@@ -193,176 +200,182 @@ public final class DatabaseService: @unchecked Sendable {
 
     /// Fetches aggregated application usage for a given date range.
     public func fetchUsage(from startDate: Date, to endDate: Date = Date()) -> [AppUsageRecord] {
-        flushSync()
-        guard let db = self.db else { return [] }
+        dbQueue.sync {
+            self.flushSyncInternal()
+            guard let db = self.db else { return [] }
 
-        let startTs = Int64(startDate.timeIntervalSince1970)
-        let endTs = Int64(endDate.timeIntervalSince1970)
+            let startTs = Int64(startDate.timeIntervalSince1970)
+            let endTs = Int64(endDate.timeIntervalSince1970)
 
-        let querySQL = """
-        SELECT
-            bundle_id,
-            app_name,
-            app_path,
-            SUM(bytes_in) as total_in,
-            SUM(bytes_out) as total_out,
-            MAX(is_system) as is_system
-        FROM hourly_usage
-        WHERE timestamp_hour >= ? AND timestamp_hour <= ?
-        GROUP BY bundle_id
-        ORDER BY (total_in + total_out) DESC;
-        """
+            let querySQL = """
+            SELECT
+                bundle_id,
+                app_name,
+                app_path,
+                SUM(bytes_in) as total_in,
+                SUM(bytes_out) as total_out,
+                MAX(is_system) as is_system
+            FROM hourly_usage
+            WHERE timestamp_hour >= ? AND timestamp_hour <= ?
+            GROUP BY bundle_id
+            ORDER BY (total_in + total_out) DESC;
+            """
 
-        var statement: OpaquePointer?
-        var records: [AppUsageRecord] = []
-        var totalAllBytes: UInt64 = 0
+            var statement: OpaquePointer?
+            var records: [AppUsageRecord] = []
+            var totalAllBytes: UInt64 = 0
 
-        if sqlite3_prepare_v2(db, querySQL, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_int64(statement, 1, startTs)
-            sqlite3_bind_int64(statement, 2, endTs)
+            if sqlite3_prepare_v2(db, querySQL, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_int64(statement, 1, startTs)
+                sqlite3_bind_int64(statement, 2, endTs)
 
-            while sqlite3_step(statement) == SQLITE_ROW {
-                let bundleId = String(cString: sqlite3_column_text(statement, 0))
-                let appName = String(cString: sqlite3_column_text(statement, 1))
-                var appPath: String? = nil
-                if let pathText = sqlite3_column_text(statement, 2) {
-                    appPath = String(cString: pathText)
+                while sqlite3_step(statement) == SQLITE_ROW {
+                    let bundleId = String(cString: sqlite3_column_text(statement, 0))
+                    let appName = String(cString: sqlite3_column_text(statement, 1))
+                    var appPath: String? = nil
+                    if let pathText = sqlite3_column_text(statement, 2) {
+                        appPath = String(cString: pathText)
+                    }
+                    let bytesIn = UInt64(max(0, sqlite3_column_int64(statement, 3)))
+                    let bytesOut = UInt64(max(0, sqlite3_column_int64(statement, 4)))
+                    let isSystem = sqlite3_column_int(statement, 5) != 0
+
+                    let total = bytesIn + bytesOut
+                    totalAllBytes += total
+
+                    let record = AppUsageRecord(
+                        id: bundleId,
+                        bundleId: bundleId,
+                        appName: appName,
+                        appPath: appPath,
+                        bytesIn: bytesIn,
+                        bytesOut: bytesOut,
+                        percentage: 0.0,
+                        isSystemProcess: isSystem
+                    )
+                    records.append(record)
                 }
-                let bytesIn = UInt64(max(0, sqlite3_column_int64(statement, 3)))
-                let bytesOut = UInt64(max(0, sqlite3_column_int64(statement, 4)))
-                let isSystem = sqlite3_column_int(statement, 5) != 0
-
-                let total = bytesIn + bytesOut
-                totalAllBytes += total
-
-                let record = AppUsageRecord(
-                    id: bundleId,
-                    bundleId: bundleId,
-                    appName: appName,
-                    appPath: appPath,
-                    bytesIn: bytesIn,
-                    bytesOut: bytesOut,
-                    percentage: 0.0,
-                    isSystemProcess: isSystem
-                )
-                records.append(record)
+                sqlite3_finalize(statement)
             }
-            sqlite3_finalize(statement)
-        }
 
-        // Calculate usage percentages
-        if totalAllBytes > 0 {
-            for i in 0..<records.count {
-                records[i].percentage = Double(records[i].totalBytes) / Double(totalAllBytes)
+            // Calculate usage percentages
+            if totalAllBytes > 0 {
+                for i in 0..<records.count {
+                    records[i].percentage = Double(records[i].totalBytes) / Double(totalAllBytes)
+                }
             }
-        }
 
-        return records
+            return records
+        }
     }
 
     /// Fetches time-series data points for charts.
     public func fetchTimeSeries(from startDate: Date, to endDate: Date = Date(), grouping: TimeGrouping) -> [ChartDataPoint] {
-        flushSync()
-        guard let db = self.db else { return [] }
+        dbQueue.sync {
+            self.flushSyncInternal()
+            guard let db = self.db else { return [] }
 
-        let startTs = Int64(startDate.timeIntervalSince1970)
-        let endTs = Int64(endDate.timeIntervalSince1970)
+            let startTs = Int64(startDate.timeIntervalSince1970)
+            let endTs = Int64(endDate.timeIntervalSince1970)
 
-        let querySQL = """
-        SELECT
-            timestamp_hour,
-            SUM(bytes_in) as total_in,
-            SUM(bytes_out) as total_out
-        FROM hourly_usage
-        WHERE timestamp_hour >= ? AND timestamp_hour <= ?
-        GROUP BY timestamp_hour
-        ORDER BY timestamp_hour ASC;
-        """
+            let querySQL = """
+            SELECT
+                timestamp_hour,
+                SUM(bytes_in) as total_in,
+                SUM(bytes_out) as total_out
+            FROM hourly_usage
+            WHERE timestamp_hour >= ? AND timestamp_hour <= ?
+            GROUP BY timestamp_hour
+            ORDER BY timestamp_hour ASC;
+            """
 
-        var statement: OpaquePointer?
-        var rawPoints: [(date: Date, bytesIn: UInt64, bytesOut: UInt64)] = []
+            var statement: OpaquePointer?
+            var rawPoints: [(date: Date, bytesIn: UInt64, bytesOut: UInt64)] = []
 
-        if sqlite3_prepare_v2(db, querySQL, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_int64(statement, 1, startTs)
-            sqlite3_bind_int64(statement, 2, endTs)
+            if sqlite3_prepare_v2(db, querySQL, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_int64(statement, 1, startTs)
+                sqlite3_bind_int64(statement, 2, endTs)
 
-            while sqlite3_step(statement) == SQLITE_ROW {
-                let ts = sqlite3_column_int64(statement, 0)
-                let bytesIn = UInt64(max(0, sqlite3_column_int64(statement, 1)))
-                let bytesOut = UInt64(max(0, sqlite3_column_int64(statement, 2)))
-                let date = Date(timeIntervalSince1970: TimeInterval(ts))
-                rawPoints.append((date, bytesIn, bytesOut))
+                while sqlite3_step(statement) == SQLITE_ROW {
+                    let ts = sqlite3_column_int64(statement, 0)
+                    let bytesIn = UInt64(max(0, sqlite3_column_int64(statement, 1)))
+                    let bytesOut = UInt64(max(0, sqlite3_column_int64(statement, 2)))
+                    let date = Date(timeIntervalSince1970: TimeInterval(ts))
+                    rawPoints.append((date, bytesIn, bytesOut))
+                }
+                sqlite3_finalize(statement)
             }
-            sqlite3_finalize(statement)
-        }
 
-        let calendar = Calendar.current
-        var results: [ChartDataPoint] = []
+            let calendar = Calendar.current
+            var results: [ChartDataPoint] = []
 
-        switch grouping {
-        case .hourly:
-            let hourFormatter = DateFormatter()
-            hourFormatter.dateFormat = "ha" // e.g. 2PM
-            let startOfTargetDay = calendar.startOfDay(for: startDate)
-            var current = startOfTargetDay
-            let endHourComponents = calendar.dateComponents([.year, .month, .day, .hour], from: endDate)
-            let endHourDate = calendar.date(from: endHourComponents) ?? endDate
+            switch grouping {
+            case .hourly:
+                let hourFormatter = DateFormatter()
+                hourFormatter.dateFormat = "ha" // e.g. 2PM
+                let startOfTargetDay = calendar.startOfDay(for: startDate)
+                var current = startOfTargetDay
+                let endHourComponents = calendar.dateComponents([.year, .month, .day, .hour], from: endDate)
+                let endHourDate = calendar.date(from: endHourComponents) ?? endDate
 
-            var map: [Date: (in: UInt64, out: UInt64)] = [:]
-            for p in rawPoints {
-                let comps = calendar.dateComponents([.year, .month, .day, .hour], from: p.date)
-                if let bucketDate = calendar.date(from: comps) {
-                    map[bucketDate] = (p.bytesIn, p.bytesOut)
+                var map: [Date: (in: UInt64, out: UInt64)] = [:]
+                for p in rawPoints {
+                    let comps = calendar.dateComponents([.year, .month, .day, .hour], from: p.date)
+                    if let bucketDate = calendar.date(from: comps) {
+                        map[bucketDate] = (p.bytesIn, p.bytesOut)
+                    }
+                }
+
+                while current <= endHourDate {
+                    let comps = calendar.dateComponents([.year, .month, .day, .hour], from: current)
+                    let bucketDate = calendar.date(from: comps) ?? current
+                    let data = map[bucketDate] ?? (0, 0)
+                    results.append(ChartDataPoint(
+                        date: bucketDate,
+                        label: hourFormatter.string(from: bucketDate),
+                        bytesIn: data.in,
+                        bytesOut: data.out
+                    ))
+                    current = calendar.date(byAdding: .hour, value: 1, to: current) ?? current.addingTimeInterval(3600)
+                }
+
+            case .daily:
+                let dayFormatter = DateFormatter()
+                dayFormatter.dateFormat = "MMM d" // e.g. Aug 17
+
+                var map: [Date: (in: UInt64, out: UInt64)] = [:]
+                for p in rawPoints {
+                    let dayStart = calendar.startOfDay(for: p.date)
+                    let existing = map[dayStart] ?? (0, 0)
+                    map[dayStart] = (existing.in + p.bytesIn, existing.out + p.bytesOut)
+                }
+
+                var current = calendar.startOfDay(for: startDate)
+                let endDay = calendar.startOfDay(for: endDate)
+
+                while current <= endDay {
+                    let data = map[current] ?? (0, 0)
+                    results.append(ChartDataPoint(
+                        date: current,
+                        label: dayFormatter.string(from: current),
+                        bytesIn: data.in,
+                        bytesOut: data.out
+                    ))
+                    current = calendar.date(byAdding: .day, value: 1, to: current) ?? current.addingTimeInterval(86400)
                 }
             }
 
-            while current <= endHourDate {
-                let comps = calendar.dateComponents([.year, .month, .day, .hour], from: current)
-                let bucketDate = calendar.date(from: comps) ?? current
-                let data = map[bucketDate] ?? (0, 0)
-                results.append(ChartDataPoint(
-                    date: bucketDate,
-                    label: hourFormatter.string(from: bucketDate),
-                    bytesIn: data.in,
-                    bytesOut: data.out
-                ))
-                current = calendar.date(byAdding: .hour, value: 1, to: current) ?? current.addingTimeInterval(3600)
-            }
-
-        case .daily:
-            let dayFormatter = DateFormatter()
-            dayFormatter.dateFormat = "MMM d" // e.g. Aug 17
-
-            var map: [Date: (in: UInt64, out: UInt64)] = [:]
-            for p in rawPoints {
-                let dayStart = calendar.startOfDay(for: p.date)
-                let existing = map[dayStart] ?? (0, 0)
-                map[dayStart] = (existing.in + p.bytesIn, existing.out + p.bytesOut)
-            }
-
-            var current = calendar.startOfDay(for: startDate)
-            let endDay = calendar.startOfDay(for: endDate)
-
-            while current <= endDay {
-                let data = map[current] ?? (0, 0)
-                results.append(ChartDataPoint(
-                    date: current,
-                    label: dayFormatter.string(from: current),
-                    bytesIn: data.in,
-                    bytesOut: data.out
-                ))
-                current = calendar.date(byAdding: .day, value: 1, to: current) ?? current.addingTimeInterval(86400)
-            }
+            return results
         }
-
-        return results
     }
 
     /// Clears all historical data.
     public func clearAllData() {
-        lock.lock()
-        writeBuffer.removeAll()
-        lock.unlock()
-        execute(sql: "DELETE FROM hourly_usage; VACUUM;")
+        dbQueue.sync {
+            lock.lock()
+            writeBuffer.removeAll()
+            lock.unlock()
+            execute(sql: "DELETE FROM hourly_usage; VACUUM;")
+        }
     }
 }

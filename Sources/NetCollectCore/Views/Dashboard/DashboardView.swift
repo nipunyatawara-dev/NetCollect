@@ -3,7 +3,6 @@ import SwiftUI
 /// The primary macOS workspace for network usage and per-application activity.
 public struct DashboardView: View {
     @ObservedObject var viewModel: AppUsageViewModel
-    @State private var showingSettings = false
 
     public init(viewModel: AppUsageViewModel = .shared) {
         self.viewModel = viewModel
@@ -24,7 +23,7 @@ public struct DashboardView: View {
         }
         .frame(minWidth: 760, idealWidth: 900, minHeight: 600, idealHeight: 720)
         .background(NetCollectBackground())
-        .sheet(isPresented: $showingSettings) {
+        .sheet(isPresented: $viewModel.isShowingSettings) {
             SettingsView(viewModel: viewModel)
         }
     }
@@ -65,7 +64,7 @@ public struct DashboardView: View {
                     LiveSpeedBadgeView(viewModel: viewModel)
 
                     Button {
-                        showingSettings = true
+                        viewModel.isShowingSettings = true
                     } label: {
                         Image(systemName: "gearshape")
                             .font(.system(size: 12, weight: .medium))

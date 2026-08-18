@@ -66,19 +66,14 @@ public struct AppUsageRowView: View {
             VStack(alignment: .trailing, spacing: 4) {
                 HStack(spacing: 8) {
                     // Meter Bar
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule()
-                                .fill(Color.primary.opacity(0.06))
-                                .frame(height: 6)
-
+                    Capsule()
+                        .fill(Color.primary.opacity(0.06))
+                        .frame(width: 80, height: 6)
+                        .overlay(alignment: .leading) {
                             Capsule()
                                 .fill(Color.accentColor)
-                                .frame(width: max(4, geo.size.width * CGFloat(min(1.0, record.percentage))), height: 6)
-                                .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 1), value: record.percentage)
+                                .frame(width: max(4, 80 * CGFloat(min(1.0, max(0.0, record.percentage)))), height: 6)
                         }
-                    }
-                    .frame(width: 80, height: 6)
 
                     // Percentage Text
                     Text(record.percentageString)

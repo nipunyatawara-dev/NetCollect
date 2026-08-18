@@ -2,25 +2,28 @@ import SwiftUI
 
 public struct NetCollectApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var viewModel = AppUsageViewModel.shared
+    @AppStorage("netcollect_show_menu_bar") private var showMenuBarExtra: Bool = true
 
     public init() {}
 
     public var body: some Scene {
         // Main Dashboard Window
         WindowGroup("NetCollect", id: "dashboard") {
-            DashboardView(viewModel: viewModel)
+            DashboardView(viewModel: .shared)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 900, height: 720)
 
         // Menu Bar Extra Status Item
-        MenuBarExtra(isInserted: $viewModel.showMenuBarExtra) {
+        MenuBarExtra(isInserted: $showMenuBarExtra) {
             MenuBarPopoverView(
-                viewModel: viewModel,
+                viewModel: .shared,
                 onOpenDashboard: {
                     AppDelegate.shared?.openDashboardWindow()
+                },
+                onOpenSettings: {
+                    AppDelegate.shared?.openSettingsWindow()
                 },
                 onQuit: {
                     AppDelegate.shared?.quitApp()
@@ -34,7 +37,7 @@ public struct NetCollectApp: App {
 
         // Preferences Window
         Settings {
-            SettingsView(viewModel: viewModel)
+            SettingsView(viewModel: .shared)
         }
     }
 }

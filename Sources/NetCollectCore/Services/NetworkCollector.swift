@@ -2,19 +2,42 @@ import Foundation
 import Darwin
 import Combine
 
-/// Polling frequency modes.
+/// Polling frequency modes for live bandwidth sampling.
 public enum PollingMode: String, CaseIterable, Identifiable, Sendable {
-    case eco = "Battery Saver (5s)"
-    case balanced = "Balanced (3s)"
-    case highPrecision = "High Precision (1s)"
+    case oneSecond = "1 second"
+    case twoSeconds = "2 seconds"
+    case balanced = "3 seconds (Default)"
+    case eco = "5 seconds"
+    case tenSeconds = "10 seconds"
 
     public var id: String { rawValue }
 
+    public var displayName: String { rawValue }
+
     public var intervalSeconds: Int {
         switch self {
-        case .eco: return 5
+        case .oneSecond: return 1
+        case .twoSeconds: return 2
         case .balanced: return 3
-        case .highPrecision: return 1
+        case .eco: return 5
+        case .tenSeconds: return 10
+        }
+    }
+
+    public static func from(storedValue: String) -> PollingMode {
+        switch storedValue {
+        case "High Precision (1s)", "1s", "1 second", "oneSecond":
+            return .oneSecond
+        case "2s", "2 seconds", "twoSeconds":
+            return .twoSeconds
+        case "Balanced (3s)", "3s", "3 seconds", "3 seconds (Default)", "balanced", "threeSeconds":
+            return .balanced
+        case "Battery Saver (5s)", "5s", "5 seconds", "eco", "fiveSeconds":
+            return .eco
+        case "10s", "10 seconds", "tenSeconds":
+            return .tenSeconds
+        default:
+            return PollingMode(rawValue: storedValue) ?? .balanced
         }
     }
 }
@@ -168,12 +191,14 @@ public final class NetworkCollector: @unchecked Sendable {
         guard let chunk = String(data: data, encoding: .utf8) else { return }
         lineBuffer += chunk
 
+        guard let lastNewlineIndex = lineBuffer.lastIndex(of: "\n") else { return }
+        let completeChunk = lineBuffer[..<lastNewlineIndex]
+        lineBuffer = String(lineBuffer[lineBuffer.index(after: lastNewlineIndex)...])
+
         var activeProcessesInSample = 0
 
-        while let newlineIndex = lineBuffer.firstIndex(of: "\n") {
-            let line = String(lineBuffer[..<newlineIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
-            lineBuffer.removeSubrange(...newlineIndex)
-
+        for rawLine in completeChunk.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty else { continue }
 
             // Header line ",bytes_in,bytes_out," marks sample boundaries

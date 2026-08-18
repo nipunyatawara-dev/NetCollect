@@ -42,3 +42,28 @@ public enum AppCategoryFilter: String, CaseIterable, Identifiable, Sendable {
         }
     }
 }
+
+/// Refresh frequency options for UI data usage aggregation and charts.
+public enum DataRefreshInterval: Int, CaseIterable, Identifiable, Sendable {
+    case oneSecond = 1
+    case twoSeconds = 2
+    case threeSeconds = 3
+    case fiveSeconds = 5
+    case tenSeconds = 10
+
+    public var id: Int { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .oneSecond: return "1 second"
+        case .twoSeconds: return "2 seconds"
+        case .threeSeconds: return "3 seconds (Default)"
+        case .fiveSeconds: return "5 seconds"
+        case .tenSeconds: return "10 seconds"
+        }
+    }
+
+    public var intervalSeconds: Double {
+        Double(rawValue)
+    }
+}

@@ -26,6 +26,7 @@ struct NetCollectTestsRunner {
         testDatabaseServiceOperations()
         testAppResolverCleaning()
         testSilentBackgroundModeSettings()
+        testRefreshAndSamplingSettings()
 
         print("\n==================================")
         print("Results: \(passedCount) Passed, \(failedCount) Failed")
@@ -189,5 +190,54 @@ struct NetCollectTestsRunner {
         // Restore initial state
         vm.isSilentBackgroundMode = initialSilent
         vm.showMenuBarExtra = initialMenu
+    }
+
+    static func testRefreshAndSamplingSettings() {
+        print("\n--- Testing Refresh and Sampling Settings ---")
+        // Test DataRefreshInterval
+        assert(DataRefreshInterval.oneSecond.intervalSeconds == 1.0, "DataRefreshInterval 1s has 1.0s interval")
+        assert(DataRefreshInterval.twoSeconds.intervalSeconds == 2.0, "DataRefreshInterval 2s has 2.0s interval")
+        assert(DataRefreshInterval.threeSeconds.intervalSeconds == 3.0, "DataRefreshInterval 3s has 3.0s interval")
+        assert(DataRefreshInterval.fiveSeconds.intervalSeconds == 5.0, "DataRefreshInterval 5s has 5.0s interval")
+        assert(DataRefreshInterval.tenSeconds.intervalSeconds == 10.0, "DataRefreshInterval 10s has 10.0s interval")
+
+        // Test PollingMode
+        assert(PollingMode.oneSecond.intervalSeconds == 1, "PollingMode 1s has 1s interval")
+        assert(PollingMode.twoSeconds.intervalSeconds == 2, "PollingMode 2s has 2s interval")
+        assert(PollingMode.balanced.intervalSeconds == 3, "PollingMode 3s has 3s interval")
+        assert(PollingMode.eco.intervalSeconds == 5, "PollingMode 5s has 5s interval")
+        assert(PollingMode.tenSeconds.intervalSeconds == 10, "PollingMode 10s has 10s interval")
+
+        // Test PollingMode backwards compatibility / migration
+        assert(PollingMode.from(storedValue: "High Precision (1s)") == .oneSecond, "Migrated High Precision (1s) to oneSecond")
+        assert(PollingMode.from(storedValue: "Battery Saver (5s)") == .eco, "Migrated Battery Saver (5s) to eco")
+        assert(PollingMode.from(storedValue: "Balanced (3s)") == .balanced, "Migrated Balanced (3s) to balanced")
+        assert(PollingMode.from(storedValue: "2 seconds") == .twoSeconds, "Parsed 2 seconds correctly")
+        assert(PollingMode.from(storedValue: "10 seconds") == .tenSeconds, "Parsed 10 seconds correctly")
+
+        // Test AppUsageViewModel dataRefreshInterval update & persistence
+        let vm = AppUsageViewModel.shared
+        let initialRefresh = vm.dataRefreshInterval
+        let initialPolling = vm.pollingMode
+
+        vm.dataRefreshInterval = .oneSecond
+        assert(UserDefaults.standard.integer(forKey: "netcollect_data_refresh_interval") == 1, "dataRefreshInterval persisted to UserDefaults")
+
+        vm.dataRefreshInterval = .fiveSeconds
+        assert(UserDefaults.standard.integer(forKey: "netcollect_data_refresh_interval") == 5, "dataRefreshInterval update persisted to UserDefaults")
+
+        vm.pollingMode = .tenSeconds
+        assert(UserDefaults.standard.string(forKey: "netcollect_polling_mode") == PollingMode.tenSeconds.rawValue, "pollingMode persisted to UserDefaults")
+
+        // Test isShowingSettings
+        let appDelegate = AppDelegate()
+        assert(vm.isShowingSettings == false, "Initial isShowingSettings is false")
+        appDelegate.openSettingsWindow()
+        assert(vm.isShowingSettings == true, "openSettingsWindow sets isShowingSettings to true")
+        vm.isShowingSettings = false
+
+        // Restore initial settings
+        vm.dataRefreshInterval = initialRefresh
+        vm.pollingMode = initialPolling
     }
 }

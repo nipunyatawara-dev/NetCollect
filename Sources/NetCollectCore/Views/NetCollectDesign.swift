@@ -48,16 +48,9 @@ extension View {
 }
 
 struct NetCollectPressStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
-            .opacity(configuration.isPressed ? 0.78 : 1)
-            .animation(
-                reduceMotion ? .linear(duration: 0.08) : .spring(response: 0.22, dampingFraction: 1),
-                value: configuration.isPressed
-            )
+            .opacity(configuration.isPressed ? 0.72 : 1.0)
     }
 }
 

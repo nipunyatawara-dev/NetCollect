@@ -53,18 +53,35 @@ public struct SettingsView: View {
 
                     preferenceSection(title: "Collection", symbol: "waveform.path.ecg") {
                         settingRow(
-                            title: "Sampling frequency",
+                            title: "Speed sampling frequency",
                             description: pollingDescription,
-                            symbol: "timer"
+                            symbol: "gauge.with.needle"
                         ) {
-                            Picker("Sampling frequency", selection: $viewModel.pollingMode) {
+                            Picker("Speed sampling frequency", selection: $viewModel.pollingMode) {
                                 ForEach(PollingMode.allCases) { mode in
-                                    Text(mode.rawValue).tag(mode)
+                                    Text(mode.displayName).tag(mode)
                                 }
                             }
                             .labelsHidden()
                             .pickerStyle(.menu)
-                            .frame(width: 118)
+                            .frame(width: 140)
+                        }
+
+                        sectionDivider
+
+                        settingRow(
+                            title: "Data usage refresh",
+                            description: refreshIntervalDescription,
+                            symbol: "arrow.clockwise"
+                        ) {
+                            Picker("Data usage refresh", selection: $viewModel.dataRefreshInterval) {
+                                ForEach(DataRefreshInterval.allCases) { interval in
+                                    Text(interval.displayName).tag(interval)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(width: 140)
                         }
                     }
 
@@ -112,7 +129,7 @@ public struct SettingsView: View {
             .padding(14)
             .help("Close")
         }
-        .frame(width: 500, height: 460)
+        .frame(width: 520, height: 500)
         .background(NetCollectBackground())
         .confirmationDialog(
             "Clear Network Usage History?",
@@ -130,12 +147,31 @@ public struct SettingsView: View {
 
     private var pollingDescription: String {
         switch viewModel.pollingMode {
-        case .eco:
-            return "Uses fewer updates to minimize background work."
+        case .oneSecond:
+            return "Fastest live bandwidth sampling (1 second interval)."
+        case .twoSeconds:
+            return "Responsive bandwidth sampling (2 seconds interval)."
         case .balanced:
-            return "Recommended for responsive updates with low CPU use."
-        case .highPrecision:
-            return "Updates most frequently for the freshest live readings."
+            return "Balanced sampling frequency for bandwidth meters (3 seconds)."
+        case .eco:
+            return "Reduced sampling frequency to minimize background work (5 seconds)."
+        case .tenSeconds:
+            return "Lowest CPU usage for live bandwidth sampling (10 seconds)."
+        }
+    }
+
+    private var refreshIntervalDescription: String {
+        switch viewModel.dataRefreshInterval {
+        case .oneSecond:
+            return "Re-queries and updates total usage metrics and charts every second."
+        case .twoSeconds:
+            return "Re-queries and updates total usage metrics and charts every 2 seconds."
+        case .threeSeconds:
+            return "Recommended default. Refreshes data usage totals every 3 seconds."
+        case .fiveSeconds:
+            return "Updates usage totals and charts every 5 seconds to reduce UI re-renders."
+        case .tenSeconds:
+            return "Minimal UI database queries for maximum efficiency (10 seconds)."
         }
     }
 

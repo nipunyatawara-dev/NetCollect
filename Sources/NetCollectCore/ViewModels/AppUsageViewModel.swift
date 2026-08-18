@@ -35,6 +35,15 @@ public final class AppUsageViewModel: ObservableObject {
         }
     }
 
+    @Published public var dataRefreshInterval: DataRefreshInterval = .threeSeconds {
+        didSet {
+            UserDefaults.standard.set(dataRefreshInterval.rawValue, forKey: "netcollect_data_refresh_interval")
+            restartRefreshTimer()
+        }
+    }
+
+    @Published public var isShowingSettings: Bool = false
+
     @Published public var isBackgroundOnly: Bool = false {
         didSet {
             UserDefaults.standard.set(isBackgroundOnly, forKey: "netcollect_bg_only")
@@ -68,7 +77,7 @@ public final class AppUsageViewModel: ObservableObject {
         guard isHoverPrecisionActive != active else { return }
         isHoverPrecisionActive = active
         if active {
-            NetworkCollector.shared.pollingMode = .highPrecision
+            NetworkCollector.shared.pollingMode = .oneSecond
         } else {
             NetworkCollector.shared.pollingMode = pollingMode
         }
@@ -78,9 +87,12 @@ public final class AppUsageViewModel: ObservableObject {
 
     private init() {
         // Load preferences
-        if let savedMode = UserDefaults.standard.string(forKey: "netcollect_polling_mode"),
-           let mode = PollingMode(rawValue: savedMode) {
-            self.pollingMode = mode
+        if let savedMode = UserDefaults.standard.string(forKey: "netcollect_polling_mode") {
+            self.pollingMode = PollingMode.from(storedValue: savedMode)
+        }
+        if let savedRefreshRaw = UserDefaults.standard.object(forKey: "netcollect_data_refresh_interval") as? Int,
+           let interval = DataRefreshInterval(rawValue: savedRefreshRaw) {
+            self.dataRefreshInterval = interval
         }
         self.isBackgroundOnly = UserDefaults.standard.bool(forKey: "netcollect_bg_only")
         self.isSilentBackgroundMode = UserDefaults.standard.bool(forKey: "netcollect_silent_bg_mode")
@@ -95,8 +107,12 @@ public final class AppUsageViewModel: ObservableObject {
         loadUsageData()
         loadChartData()
 
-        // Set up periodic UI refresh (every 3 seconds) to pull batched changes smoothly
-        self.refreshTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        restartRefreshTimer()
+    }
+
+    public func restartRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: dataRefreshInterval.intervalSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.loadUsageData()
                 self?.loadChartData()

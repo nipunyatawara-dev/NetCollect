@@ -280,40 +280,7 @@ public struct UsageChartView: View {
                         }
                     }
                 }
-                .chartOverlay { proxy in
-                    GeometryReader { geo in
-                        Rectangle()
-                            .fill(Color.clear)
-                            .contentShape(Rectangle())
-                            .onContinuousHover { phase in
-                                switch phase {
-                                case .active(let location):
-                                    guard let plotFrame = proxy.plotFrame else { return }
-                                    let plotRect = geo[plotFrame]
-                                    guard plotRect.contains(location) else {
-                                        hoveredDate = nil
-                                        return
-                                    }
-
-                                    // ChartProxy positions are relative to the plot area, while hover
-                                    // locations are relative to the full chart including its axes.
-                                    let plotX = location.x - plotRect.minX
-                                    guard let date: Date = proxy.value(atX: plotX),
-                                          let nearestPoint = points.min(by: {
-                                              abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
-                                          }) else { return }
-
-                                    // Snap to a real bucket so the rule is exact and pointer motion
-                                    // doesn't trigger a state update for every pixel.
-                                    if hoveredDate != nearestPoint.date {
-                                        hoveredDate = nearestPoint.date
-                                    }
-                                case .ended:
-                                    hoveredDate = nil
-                                }
-                            }
-                    }
-                }
+                .chartXSelection(value: $hoveredDate)
                 .animation(.none, value: timeframe)
 
                 if !hasAnyTraffic {

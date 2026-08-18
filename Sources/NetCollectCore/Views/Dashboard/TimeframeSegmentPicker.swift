@@ -16,7 +16,7 @@ public struct TimeframeSegmentPicker: View {
                 let isSelected = selected == timeframe
 
                 Button {
-                    withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 1)) {
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.9)) {
                         selected = timeframe
                     }
                 } label: {
@@ -26,14 +26,13 @@ public struct TimeframeSegmentPicker: View {
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, 9)
                         .frame(height: 27)
-                        .background {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(.background)
-                                    .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
-                                    .matchedGeometryEffect(id: "selectedPeriod", in: animationNamespace)
-                            }
-                        }
+                        .background(
+                            isSelected ?
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color(nsColor: .controlBackgroundColor))
+                                .shadow(color: .black.opacity(0.12), radius: 2, y: 1) :
+                            nil
+                        )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(NetCollectPressStyle())

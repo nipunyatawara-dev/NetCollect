@@ -9,6 +9,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public var dashboardWindowController: NSWindowController?
     public var isExplicitQuit: Bool = false
 
+    override public init() {
+        super.init()
+        AppDelegate.shared = self
+    }
+
     public func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
 
@@ -89,9 +94,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func evaluateActivationPolicyAfterWindowClosed() {
-        let visibleWindows = NSApp.windows.filter { window in
+        let visibleWindows = NSApp?.windows.filter { window in
             window.isVisible && window.canBecomeMain && !window.isSheet && !(String(describing: type(of: window)).contains("StatusBar"))
-        }
+        } ?? []
 
         guard visibleWindows.isEmpty else { return }
 
@@ -100,9 +105,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if silentBg || bgOnly {
             // Hide from Dock and App Switcher when no windows are open
-            NSApp.setActivationPolicy(.accessory)
+            NSApp?.setActivationPolicy(.accessory)
         } else {
-            NSApp.setActivationPolicy(.regular)
+            NSApp?.setActivationPolicy(.regular)
         }
     }
 
@@ -110,13 +115,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         isExplicitQuit = true
         DatabaseService.shared.flushSync()
         NetworkCollector.shared.stop()
-        NSApp.terminate(nil)
+        NSApp?.terminate(nil)
+    }
+
+    public func openSettingsWindow() {
+        AppUsageViewModel.shared.isShowingSettings = true
+        openDashboardWindow()
     }
 
     public func openDashboardWindow() {
         // Bring app to foreground and make Dock icon visible
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp?.setActivationPolicy(.regular)
+        NSApp?.activate(ignoringOtherApps: true)
 
         if let existing = dashboardWindowController?.window {
             existing.makeKeyAndOrderFront(nil)
@@ -126,7 +136,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // WindowGroup owns the first dashboard window. Reuse it before creating an
         // AppKit-managed replacement so the menu bar action never duplicates it.
-        if let existing = NSApp.windows.first(where: { window in
+        if let existing = NSApp?.windows.first(where: { window in
             window.title == "NetCollect" &&
             window.canBecomeMain &&
             !window.isSheet &&
