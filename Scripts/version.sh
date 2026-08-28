@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+NETCOLLECT_VERSION="1.1.0"
+NETCOLLECT_BUILD_NUMBER="3"

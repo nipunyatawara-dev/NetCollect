@@ -289,6 +289,16 @@ public final class AppUsageViewModel: ObservableObject {
         loadChartData()
     }
 
+    public func deleteHistory(for period: HistoryDeletionPeriod, now: Date = Date()) {
+        if let interval = period.dateInterval(containing: now) {
+            DatabaseService.shared.deleteData(from: interval.start, to: interval.end)
+        } else {
+            DatabaseService.shared.clearAllData()
+        }
+        loadUsageData()
+        loadChartData()
+    }
+
     public func updateActivationPolicy() {
         if isSilentBackgroundMode {
             let hasVisibleWindow = NSApp?.windows.contains(where: {

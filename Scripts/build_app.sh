@@ -5,6 +5,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
 BUILD_DIR="$PROJECT_DIR/.build/release"
 APP_BUNDLE="$PROJECT_DIR/NetCollect.app"
+source "$SCRIPT_DIR/version.sh"
 
 echo "🎨 Ensuring AppIcon.icns exists..."
 if [ ! -f "$PROJECT_DIR/AppIcon.icns" ]; then
@@ -24,7 +25,7 @@ cp "$BUILD_DIR/NetCollect" "$APP_BUNDLE/Contents/MacOS/NetCollect"
 chmod +x "$APP_BUNDLE/Contents/MacOS/NetCollect"
 cp "$PROJECT_DIR/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 
-cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
+cat << EOF > "$APP_BUNDLE/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -46,9 +47,9 @@ cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>$NETCOLLECT_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>$NETCOLLECT_BUILD_NUMBER</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

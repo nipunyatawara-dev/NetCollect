@@ -46,8 +46,10 @@ struct NetCollectTestsRunner {
 
         testByteCountFormatter()
         testTimeframeFilterIntervals()
+        testHistoryDeletionPeriods()
         testChartDataPointIdentity()
         testDatabaseServiceOperations()
+        testRangedHistoryDeletion()
         testAppResolverCleaning()
         testSilentBackgroundModeSettings()
         testRefreshAndSamplingSettings()
@@ -390,6 +392,80 @@ struct NetCollectTestsRunner {
         db.clearAllData()
         let clearedRecords = db.fetchUsage(from: startOfDay, to: testDate.addingTimeInterval(3600))
         assert(clearedRecords.isEmpty, "Database successfully cleared")
+    }
+
+    static func testHistoryDeletionPeriods() {
+        print("\n--- Testing History Deletion Periods ---")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let referenceDate = calendar.date(from: DateComponents(
+            year: 2026,
+            month: 3,
+            day: 9,
+            hour: 12
+        ))!
+
+        let today = HistoryDeletionPeriod.today.dateInterval(containing: referenceDate, calendar: calendar)!
+        assert(today.start == calendar.startOfDay(for: referenceDate), "Today deletion starts at local midnight")
+        assert(today.end == calendar.date(byAdding: .day, value: 1, to: today.start), "Today deletion ends at the next local midnight")
+
+        let last3Days = HistoryDeletionPeriod.last3Days.dateInterval(containing: referenceDate, calendar: calendar)!
+        assert(last3Days.start == calendar.date(byAdding: .day, value: -2, to: today.start), "Last 3 Days includes today and two preceding dates")
+        assert(last3Days.end == today.end, "Preset deletion periods include the complete current date")
+        assert(HistoryDeletionPeriod.allHistory.dateInterval(containing: referenceDate, calendar: calendar) == nil, "All History is represented separately from a bounded period")
+    }
+
+    static func testRangedHistoryDeletion() {
+        print("\n--- Testing Ranged History Deletion ---")
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ranged_delete_\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: dbURL)
+            try? FileManager.default.removeItem(atPath: dbURL.path + "-wal")
+            try? FileManager.default.removeItem(atPath: dbURL.path + "-shm")
+        }
+
+        let db = DatabaseService(databaseURL: dbURL)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let oldDate = calendar.date(byAdding: .day, value: -4, to: today)!.addingTimeInterval(12 * 3600)
+        let twoDaysAgo = calendar.date(byAdding: .day, value: -2, to: today)!.addingTimeInterval(12 * 3600)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!.addingTimeInterval(12 * 3600)
+        let todayNoon = today.addingTimeInterval(12 * 3600)
+        let tomorrowNoon = calendar.date(byAdding: .day, value: 1, to: today)!.addingTimeInterval(12 * 3600)
+
+        func record(_ date: Date, id: String) {
+            db.recordUsage(
+                date: date,
+                bundleId: id,
+                appName: id,
+                appPath: nil,
+                bytesIn: 1_000,
+                bytesOut: 500,
+                isSystem: false
+            )
+        }
+
+        record(oldDate, id: "old")
+        record(twoDaysAgo, id: "two-days-ago")
+        record(yesterday, id: "yesterday")
+        db.flushSync()
+
+        // Keep these in memory to verify that ranged deletion handles buffered writes too.
+        record(todayNoon, id: "today")
+        record(tomorrowNoon, id: "tomorrow")
+
+        let interval = HistoryDeletionPeriod.last3Days.dateInterval(containing: todayNoon, calendar: calendar)!
+        db.deleteData(from: interval.start, to: interval.end)
+
+        let fetchStart = calendar.date(byAdding: .day, value: -7, to: today)!
+        let fetchEnd = calendar.date(byAdding: .day, value: 2, to: today)!
+        let remaining = db.fetchUsage(from: fetchStart, to: fetchEnd)
+        let remainingIDs = Set(remaining.map(\.bundleId))
+
+        assert(remainingIDs == Set(["old", "tomorrow"]), "Ranged deletion removes only the selected calendar days")
+        assert(!remainingIDs.contains("today"), "Ranged deletion removes matching unflushed samples")
+        assert(remainingIDs.contains("tomorrow"), "Ranged deletion preserves the exclusive end boundary")
     }
 
     static func testAppResolverCleaning() {

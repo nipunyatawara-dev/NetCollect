@@ -412,8 +412,49 @@ public final class DatabaseService: @unchecked Sendable {
         dbQueue.sync {
             lock.lock()
             writeBuffer.removeAll()
+            execute(sql: "DELETE FROM hourly_usage;")
             lock.unlock()
-            execute(sql: "DELETE FROM hourly_usage; VACUUM;")
+            execute(sql: "VACUUM;")
+        }
+    }
+
+    /// Deletes records in a half-open date interval, including matching buffered writes.
+    public func deleteData(from startDate: Date, to endDate: Date) {
+        guard startDate < endDate else { return }
+
+        dbQueue.sync {
+            guard let db = self.db else { return }
+
+            let startTs = Int64(startDate.timeIntervalSince1970)
+            let endTs = Int64(endDate.timeIntervalSince1970)
+
+            // Hold the buffer lock through the database delete so recording and deletion
+            // have one clear ordering and an old buffered sample cannot reappear later.
+            lock.lock()
+            writeBuffer = writeBuffer.filter { key, _ in
+                guard let separator = key.firstIndex(of: "|"),
+                      let timestamp = Int64(key[..<separator]) else {
+                    return true
+                }
+                return timestamp < startTs || timestamp >= endTs
+            }
+
+            var statement: OpaquePointer?
+            let sql = "DELETE FROM hourly_usage WHERE timestamp_hour >= ? AND timestamp_hour < ?;"
+            if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_int64(statement, 1, startTs)
+                sqlite3_bind_int64(statement, 2, endTs)
+
+                if sqlite3_step(statement) != SQLITE_DONE {
+                    let message = String(cString: sqlite3_errmsg(db))
+                    print("Error deleting ranged usage: \(message)")
+                }
+            } else {
+                let message = String(cString: sqlite3_errmsg(db))
+                print("Error preparing ranged usage deletion: \(message)")
+            }
+            sqlite3_finalize(statement)
+            lock.unlock()
         }
     }
 }

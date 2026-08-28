@@ -4,9 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 cd "$ROOT"
+source "$SCRIPT_DIR/version.sh"
 
 APP_NAME="NetCollect"
-VERSION="1.0.0"
+VERSION="$NETCOLLECT_VERSION"
 DMG_NAME="${APP_NAME}-v${VERSION}.dmg"
 DIST="$ROOT/dist"
 

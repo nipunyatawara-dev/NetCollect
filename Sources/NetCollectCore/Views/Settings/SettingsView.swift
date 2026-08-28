@@ -4,7 +4,8 @@ import SwiftUI
 public struct SettingsView: View {
     @ObservedObject var viewModel: AppUsageViewModel
     @Environment(\.dismiss) private var dismiss
-    @State private var showingClearConfirmation = false
+    @State private var selectedDeletionPeriod: HistoryDeletionPeriod = .today
+    @State private var showingDeleteConfirmation = false
 
     public init(viewModel: AppUsageViewModel = .shared) {
         self.viewModel = viewModel
@@ -88,14 +89,25 @@ public struct SettingsView: View {
                     preferenceSection(title: "Data", symbol: "internaldrive") {
                         settingRow(
                             title: "Network history",
-                            description: "Permanently remove all daily, weekly, and monthly usage records.",
+                            description: selectedDeletionPeriod.deletionDescription,
                             symbol: "trash"
                         ) {
-                            Button("Clear…", role: .destructive) {
-                                showingClearConfirmation = true
+                            HStack(spacing: 8) {
+                                Picker("History period", selection: $selectedDeletionPeriod) {
+                                    ForEach(HistoryDeletionPeriod.allCases) { period in
+                                        Text(period.displayName).tag(period)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(width: 118)
+
+                                Button("Delete…", role: .destructive) {
+                                    showingDeleteConfirmation = true
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
                         }
                     }
 
@@ -132,16 +144,16 @@ public struct SettingsView: View {
         .frame(width: 520, height: 500)
         .background(NetCollectBackground())
         .confirmationDialog(
-            "Clear Network Usage History?",
-            isPresented: $showingClearConfirmation,
+            selectedDeletionPeriod.confirmationTitle,
+            isPresented: $showingDeleteConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Delete All History", role: .destructive) {
-                viewModel.clearAllData()
+            Button(selectedDeletionPeriod.destructiveButtonTitle, role: .destructive) {
+                viewModel.deleteHistory(for: selectedDeletionPeriod)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This cannot be undone. All recorded network usage will be permanently removed.")
+            Text("This cannot be undone. \(selectedDeletionPeriod.deletionDescription)")
         }
     }
 

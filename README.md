@@ -26,6 +26,7 @@ Written in Swift using SwiftUI, Swift Charts, `nettop`, and SQLite.
 - **Activity graph**: Interactive chart showing bandwidth over time with hover inspection.
 - **Menu bar and window modes**: Keep it in the menu bar for quick checks, or open the main window to search, filter by system/user apps, and sort by usage.
 - **Local storage**: Stores history in a local SQLite file at `~/Library/Application Support/NetCollect/netcollect.sqlite`. No data leaves your Mac.
+- **Flexible history deletion**: Remove today, the last 3, 7, 14, 30, or 90 days, or clear all stored history from Settings.
 - **Low resource usage**: Uses short-lived network snapshots instead of a continuously running sampler.
 
 ---
@@ -54,7 +55,7 @@ brew install --cask netcollect
 
 ### Direct Download (DMG)
 
-Download `NetCollect-v1.0.0.dmg` from the [Releases](https://github.com/nipunyatawara-dev/NetCollect/releases/latest) page, open the disk image, and drag `NetCollect.app` into your Applications folder.
+Download `NetCollect-v1.1.0.dmg` from the [Releases](https://github.com/nipunyatawara-dev/NetCollect/releases/latest) page, open the disk image, and drag `NetCollect.app` into your Applications folder.
 
 ---
 
