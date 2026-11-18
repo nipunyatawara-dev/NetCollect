@@ -6,18 +6,13 @@ public final class SingleInstanceGuard: @unchecked Sendable {
     public static let shared = SingleInstanceGuard()
 
     private let lockURL: URL
+    private let usesDefaultDirectory: Bool
     private var lockFileDescriptor: Int32 = -1
     private let lock = NSLock()
 
     public init(lockURL: URL? = nil) {
-        if let lockURL {
-            self.lockURL = lockURL
-        } else {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            let directory = appSupport.appendingPathComponent("NetCollect", isDirectory: true)
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            self.lockURL = directory.appendingPathComponent("collector.lock")
-        }
+        self.lockURL = lockURL ?? LocalStorage.directory.appending(path: "collector.lock")
+        usesDefaultDirectory = lockURL == nil
     }
 
     deinit {
@@ -30,8 +25,13 @@ public final class SingleInstanceGuard: @unchecked Sendable {
 
         if lockFileDescriptor >= 0 { return true }
 
-        let descriptor = open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { return false }
+        let descriptor: Int32
+        do {
+            if usesDefaultDirectory { try LocalStorage.prepareDirectory() }
+            descriptor = try LocalStorage.openPrivateFile(at: lockURL.path, create: true)
+        } catch {
+            return false
+        }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             close(descriptor)
             return false

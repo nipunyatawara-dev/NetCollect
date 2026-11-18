@@ -5,6 +5,8 @@ import Charts
 public struct UsageChartView: View {
     public let points: [ChartDataPoint]
     public let timeframe: TimeframeFilter
+    private let dateRange: String
+    private let hasHistory: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hoveredDate: Date?
@@ -12,8 +14,14 @@ public struct UsageChartView: View {
     @State private var showUpload: Bool = true
 
     public init(points: [ChartDataPoint], timeframe: TimeframeFilter) {
+        self.init(points: points, timeframe: timeframe, dateRange: timeframe.formattedDateRange(), hasHistory: true)
+    }
+
+    init(points: [ChartDataPoint], timeframe: TimeframeFilter, dateRange: String, hasHistory: Bool) {
         self.points = points
         self.timeframe = timeframe
+        self.dateRange = dateRange
+        self.hasHistory = hasHistory
     }
 
     private var hoveredPoint: ChartDataPoint? {
@@ -48,21 +56,21 @@ public struct UsageChartView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // MARK: - Header Bar & Live Tooltip
+        let selectedPoint = hoveredPoint
+        let yMaximum = maxBytes
+        let hasTraffic = hasAnyTraffic
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label("Activity", systemImage: "chart.xyaxis.line")
+                    .font(.headline)
+                Text(dateRange)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chart.xyaxis.line")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.accentColor)
-
-                        Text("Activity")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.primary)
-                    }
-
-                    if let selected = hoveredPoint {
+                    if let selected = selectedPoint {
                         HStack(spacing: 10) {
                             Text(selected.label)
                                 .font(.system(size: 11, weight: .bold))
@@ -231,7 +239,7 @@ public struct UsageChartView: View {
                         }
 
                         // Hover Highlight Indicators
-                        if let hovered = hoveredPoint, hovered.id == point.id {
+                        if let hovered = selectedPoint, hovered.id == point.id {
                             RuleMark(x: .value("Hovered", hovered.date))
                                 .foregroundStyle(Color.primary.opacity(0.20))
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
@@ -256,7 +264,7 @@ public struct UsageChartView: View {
                         }
                     }
                 }
-                .chartYScale(domain: 0 ... maxBytes)
+                .chartYScale(domain: 0 ... yMaximum)
                 .chartXAxis {
                     AxisMarks(values: .stride(by: xAxisComponent, count: xAxisStride)) { value in
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
@@ -282,8 +290,11 @@ public struct UsageChartView: View {
                 }
                 .chartXSelection(value: $hoveredDate)
                 .animation(.none, value: timeframe)
+                .opacity(hasHistory ? 1 : 0)
+                .allowsHitTesting(hasHistory)
+                .accessibilityHidden(!hasHistory)
 
-                if !hasAnyTraffic {
+                if hasHistory && !hasTraffic {
                     VStack(spacing: 5) {
                         Image(systemName: "waveform.path.ecg")
                             .font(.system(size: 15, weight: .medium))
@@ -305,6 +316,8 @@ public struct UsageChartView: View {
 
     private func formatBytes(_ bytes: Double) -> String {
         guard bytes.isFinite, bytes > 0 else { return "0 B" }
-        return ByteCountFormatter.format(bytes: UInt64(bytes.rounded()))
+        let rounded = bytes.rounded()
+        let value = rounded >= Double(UInt64.max) ? UInt64.max : UInt64(rounded)
+        return ByteCountFormatter.format(bytes: value)
     }
 }

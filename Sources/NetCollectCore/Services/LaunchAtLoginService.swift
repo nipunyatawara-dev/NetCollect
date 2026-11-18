@@ -1,35 +1,15 @@
-import Foundation
 import ServiceManagement
 
-/// Handles macOS Launch at Login configuration.
-public final class LaunchAtLoginService: @unchecked Sendable {
-    public static let shared = LaunchAtLoginService()
+@MainActor
+enum LaunchAtLoginService {
+    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
 
-    private init() {}
-
-    public var isEnabled: Bool {
-        get {
-            if #available(macOS 13.0, *) {
-                return SMAppService.mainApp.status == .enabled
-            }
-            return false
-        }
-        set {
-            if #available(macOS 13.0, *) {
-                do {
-                    if newValue {
-                        if SMAppService.mainApp.status != .enabled {
-                            try SMAppService.mainApp.register()
-                        }
-                    } else {
-                        if SMAppService.mainApp.status == .enabled {
-                            try SMAppService.mainApp.unregister()
-                        }
-                    }
-                } catch {
-                    print("Failed to update LaunchAtLogin: \(error)")
-                }
-            }
+    static func setEnabled(_ enabled: Bool) throws {
+        let service = SMAppService.mainApp
+        if enabled && service.status != .enabled {
+            try service.register()
+        } else if !enabled && (service.status == .enabled || service.status == .requiresApproval) {
+            try service.unregister()
         }
     }
 }

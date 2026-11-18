@@ -41,24 +41,26 @@ public enum TimeframeFilter: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Subtitle describing the date range.
     public func rangeDescription(for referenceDate: Date = Date(), calendar: Calendar = .current) -> String {
-        let interval = dateInterval(for: referenceDate, calendar: calendar)
+        "\(title) (\(formattedDateRange(for: referenceDate, calendar: calendar)))"
+    }
+
+    func formattedDateRange(for referenceDate: Date = Date(), calendar: Calendar = .current) -> String {
         let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
 
         switch self {
         case .daily:
             formatter.dateStyle = .medium
-            formatter.timeStyle = .none
-            return "Today (\(formatter.string(from: referenceDate)))"
+            return formatter.string(from: referenceDate)
         case .weekly:
-            formatter.dateFormat = "d MMM"
-            let startStr = formatter.string(from: interval.start)
-            let endStr = formatter.string(from: interval.end)
-            return "This Week (\(startStr) – \(endStr))"
+            let interval = dateInterval(for: referenceDate, calendar: calendar)
+            formatter.setLocalizedDateFormatFromTemplate("MMMd")
+            return "\(formatter.string(from: interval.start)) – \(formatter.string(from: interval.end))"
         case .monthly:
-            formatter.dateFormat = "MMMM yyyy"
-            return "This Month (\(formatter.string(from: referenceDate)))"
+            formatter.setLocalizedDateFormatFromTemplate("MMMM yyyy")
+            return formatter.string(from: referenceDate)
         }
     }
 }

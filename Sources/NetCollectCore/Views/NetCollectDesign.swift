@@ -2,69 +2,26 @@ import SwiftUI
 
 enum NetCollectDesign {
     static let accent = Color.accentColor
-    static let positive = Color(red: 0.20, green: 0.72, blue: 0.43)
-    static let cardRadius: CGFloat = 16
-    static let controlRadius: CGFloat = 9
-    static let contentPadding: CGFloat = 24
-}
-
-struct NetCollectBackground: View {
-    var body: some View {
-        Color(nsColor: .windowBackgroundColor)
-            .ignoresSafeArea()
-    }
-}
-
-struct NetCollectSurface: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
-    let radius: CGFloat
-
-    func body(content: Content) -> some View {
-        content
-            .background {
-                ZStack {
-                    if reduceTransparency {
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .fill(Color(nsColor: .controlBackgroundColor))
-                    } else {
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .fill(.regularMaterial)
-                    }
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.62), lineWidth: 0.75)
-                }
-                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.16 : 0.055), radius: 16, x: 0, y: 7)
-            }
-    }
+    static let cardRadius: CGFloat = 14
+    static let contentPadding: CGFloat = 22
 }
 
 extension View {
-    func netCollectSurface(radius: CGFloat = NetCollectDesign.cardRadius) -> some View {
-        modifier(NetCollectSurface(radius: radius))
-    }
-}
-
-struct NetCollectPressStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.72 : 1.0)
-    }
-}
-
-struct LiveStatusDot: View {
-    let isActive: Bool
-
-    var body: some View {
-        Circle()
-            .fill(isActive ? NetCollectDesign.positive : Color.secondary.opacity(0.45))
-            .frame(width: 7, height: 7)
+    func netCollectSurface() -> some View {
+        background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: NetCollectDesign.cardRadius))
             .overlay {
-                Circle()
-                    .stroke((isActive ? NetCollectDesign.positive : Color.clear).opacity(0.28), lineWidth: 4)
+                RoundedRectangle(cornerRadius: NetCollectDesign.cardRadius)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    .allowsHitTesting(false)
             }
-            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    func netCollectProminentButton() -> some View {
+        if #available(macOS 26.0, *) {
+            buttonStyle(.glassProminent)
+        } else {
+            buttonStyle(.borderedProminent)
+        }
     }
 }

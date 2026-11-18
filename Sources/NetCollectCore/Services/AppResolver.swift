@@ -31,10 +31,11 @@ public final class AppResolver: @unchecked Sendable {
 
     private let lock = NSLock()
     private var pidCache: [pid_t: ResolvedAppInfo] = [:]
-    private var nameCache: [String: ResolvedAppInfo] = [:]
-    private var iconCache: [String: NSImage] = [:]
+    @MainActor private var iconCache = NSCache<NSString, NSImage>()
 
     private init() {}
+
+    @MainActor private var didConfigureIconCache = false
 
     /// Resolves a process ID and process name to a consolidated Application Info.
     public func resolve(pid: pid_t, rawName: String) -> ResolvedAppInfo {
@@ -203,7 +204,7 @@ public final class AppResolver: @unchecked Sendable {
             "mDNSResponder", "apsd", "airportd", "rapportd", "sharingd",
             "identityservice", "launchd", "syslogd", "kernel_task", "cloudd",
             "nsurlsessiond", "trustd", "securityd", "wifip2pd", "netbiosd",
-            "ControlCenter", "boringNotch", "bluetoothd", "configd", "locationd"
+            "ControlCenter", "bluetoothd", "configd", "locationd"
         ]
         return systemDaemons.contains(name)
     }
@@ -218,13 +219,14 @@ public final class AppResolver: @unchecked Sendable {
     }
 
     /// Retrieves or generates an icon for the given bundle ID / app path.
+    @MainActor
     public func icon(for bundleId: String, appPath: String?, isSystem: Bool) -> NSImage {
-        lock.lock()
-        if let cached = iconCache[bundleId] {
-            lock.unlock()
-            return cached
+        if !didConfigureIconCache {
+            iconCache.countLimit = 256
+            didConfigureIconCache = true
         }
-        lock.unlock()
+        let key = (appPath ?? bundleId) as NSString
+        if let cached = iconCache.object(forKey: key) { return cached }
 
         var image: NSImage? = nil
 
@@ -244,13 +246,9 @@ public final class AppResolver: @unchecked Sendable {
             }
         }
 
-        let finalImage = image ?? NSImage()
-        finalImage.size = NSSize(width: 32, height: 32)
-        lock.lock()
-        iconCache[bundleId] = finalImage
-        lock.unlock()
-
-        return finalImage
+        let icon = image ?? NSImage()
+        iconCache.setObject(icon, forKey: key)
+        return icon
     }
 
     /// Clears cached PID mappings when processes terminate.

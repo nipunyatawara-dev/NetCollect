@@ -11,7 +11,7 @@ public struct ChartDataPoint: Identifiable, Sendable, Equatable {
     public let label: String
     public var bytesIn: UInt64
     public var bytesOut: UInt64
-    public var totalBytes: UInt64 { bytesIn + bytesOut }
+    public var totalBytes: UInt64 { bytesIn + min(bytesOut, UInt64.max - bytesIn) }
 
     public init(
         date: Date,

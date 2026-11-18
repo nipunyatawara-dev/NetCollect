@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A restrained summary card with stable numeric typography and immediate pointer feedback.
+/// A usage summary with a numeric transition when the displayed period changes.
 public struct HeroMetricsCard: View {
     public let title: String
     public let value: String
@@ -8,9 +8,9 @@ public struct HeroMetricsCard: View {
     public let iconName: String
     public let accentColor: Color
     public let isProminent: Bool
-
+    private let bytes: UInt64
+    private let timeframe: TimeframeFilter?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isHovered = false
 
     public init(
         title: String,
@@ -18,7 +18,9 @@ public struct HeroMetricsCard: View {
         subtitle: String,
         iconName: String,
         accentColor: Color,
-        isProminent: Bool = false
+        isProminent: Bool = false,
+        bytes: UInt64 = 0,
+        timeframe: TimeframeFilter? = nil
     ) {
         self.title = title
         self.value = value
@@ -26,14 +28,16 @@ public struct HeroMetricsCard: View {
         self.iconName = iconName
         self.accentColor = accentColor
         self.isProminent = isProminent
+        self.bytes = bytes
+        self.timeframe = timeframe
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let unit = value.split(separator: " ").last
+        return VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text(title.uppercased())
-                    .font(.system(size: 9, weight: .semibold))
-                    .tracking(0.65)
+                Text(title)
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
 
                 Spacer()
@@ -52,25 +56,27 @@ public struct HeroMetricsCard: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                    .contentTransition(.numericText())
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(bytes)))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: timeframe)
+                    // Replacing the text on a unit change prevents the old unit
+                    // and new digits from ever appearing together.
+                    .id(unit)
+                    .keyframeAnimator(initialValue: 1.0, trigger: unit) { text, opacity in
+                        text.opacity(opacity)
+                    } keyframes: { _ in
+                        MoveKeyframe(reduceMotion ? 1 : 0.7)
+                        LinearKeyframe(1, duration: 0.18)
+                    }
 
-                Text(subtitle)
-                    .font(.system(size: 10, weight: .medium))
+                Text(subtitle.isEmpty ? " " : subtitle)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .accessibilityHidden(subtitle.isEmpty)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background {
-            if isProminent {
-                RoundedRectangle(cornerRadius: NetCollectDesign.cardRadius, style: .continuous)
-                    .fill(accentColor.opacity(0.055))
-            }
-        }
         .netCollectSurface()
-        .offset(y: isHovered && !reduceMotion ? -2 : 0)
-        .animation(.spring(response: 0.32, dampingFraction: 1), value: isHovered)
-        .onHover { isHovered = $0 }
     }
 }

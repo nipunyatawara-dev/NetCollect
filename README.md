@@ -1,6 +1,6 @@
 # NetCollect
 
-NetCollect is a macOS app that monitors network data usage per application. It tracks downloads and uploads across today, the current week, the current month, and all time.
+NetCollect is a macOS app that monitors network data usage per application. It tracks downloads and uploads across today, the current week, and the current month.
 
 Written in Swift using SwiftUI, Swift Charts, `nettop`, and SQLite.
 
@@ -20,8 +20,8 @@ Written in Swift using SwiftUI, Swift Charts, `nettop`, and SQLite.
 
 ## Features
 
-- **Timeframe tracking**: View usage by day, week, month, or total history.
-- **Live bandwidth speeds**: Shows current upload and download rates in the menu bar and dashboard window.
+- **Timeframe tracking**: View usage for today, this week, or this month.
+- **Live bandwidth speeds**: Shows current upload and download rates in the menu bar panel and dashboard toolbar.
 - **App grouping**: Groups helper processes (like Chrome renderers or Spotify helpers) under their main application.
 - **Activity graph**: Interactive chart showing bandwidth over time with hover inspection.
 - **Menu bar and window modes**: Keep it in the menu bar for quick checks, or open the main window to search, filter by system/user apps, and sort by usage.
@@ -35,7 +35,8 @@ Written in Swift using SwiftUI, Swift Charts, `nettop`, and SQLite.
 
 - macOS 14.0 (Sonoma) or later
 - Apple Silicon Mac
-- Xcode 15+ or Swift 6.0+ (to build from source)
+- Xcode 27 or later (to build with the macOS 27 SDK)
+- Native Liquid Glass controls on macOS 26 and later
 
 ---
 
@@ -55,13 +56,20 @@ brew install --cask netcollect
 
 ### Direct Download (DMG)
 
-Download `NetCollect-v1.1.0.dmg` from the [Releases](https://github.com/nipunyatawara-dev/NetCollect/releases/latest) page, open the disk image, and drag `NetCollect.app` into your Applications folder.
+Download `NetCollect-v1.2.0.dmg` from the [Releases](https://github.com/nipunyatawara-dev/NetCollect/releases/latest) page, open the disk image, and drag `NetCollect.app` into your Applications folder.
 
 ---
 
 ## Development and building
 
 ### Run with Swift Package Manager
+
+Select full Xcode for these commands. If your system selects Command Line Tools, set `DEVELOPER_DIR` in your shell:
+
+```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+```
+
 ```bash
 swift run NetCollect
 ```
@@ -72,6 +80,9 @@ swift run NetCollectTests
 ```
 
 ### Build release app bundle
+
+Use the app bundle to preview the native Liquid Glass appearance. The packager verifies the linked macOS SDK version.
+
 ```bash
 ./Scripts/build_app.sh
 ```

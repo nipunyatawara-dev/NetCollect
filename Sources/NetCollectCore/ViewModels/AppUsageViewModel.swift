@@ -6,31 +6,68 @@ import Combine
 public final class AppUsageViewModel: ObservableObject {
     public static let shared = AppUsageViewModel()
 
-    // MARK: - Published State
-    @Published public var selectedTimeframe: TimeframeFilter = .daily {
-        didSet {
-            loadUsageData()
-            loadChartData()
+    private struct UsageHistory: Equatable {
+        let timeframe: TimeframeFilter
+        let dateRange: String
+        let records: [AppUsageRecord]
+        let chartPoints: [ChartDataPoint]
+        let bytesIn: UInt64
+        let bytesOut: UInt64
+
+        init(snapshot: DatabaseService.Snapshot, timeframe: TimeframeFilter, referenceDate: Date) {
+            self.timeframe = timeframe
+            dateRange = timeframe.formattedDateRange(for: referenceDate)
+            records = snapshot.records
+            chartPoints = snapshot.points
+
+            var download: UInt64 = 0
+            var upload: UInt64 = 0
+            for record in records {
+                download += min(record.bytesIn, UInt64.max - download)
+                upload += min(record.bytesOut, UInt64.max - upload)
+            }
+            bytesIn = download
+            bytesOut = upload
         }
     }
+
+    // Publish the period, totals, chart, and rows as one update. The request
+    // stays separate so changing it never blanks or relabels the visible data.
+    @Published private var history: UsageHistory?
+    private var requestedTimeframe: TimeframeFilter = .daily
+
+    public var selectedTimeframe: TimeframeFilter {
+        get { history?.timeframe ?? .daily }
+        set {
+            guard requestedTimeframe != newValue else { return }
+            requestedTimeframe = newValue
+            refreshData(replacingPending: true)
+        }
+    }
+
+    var displayedDateRange: String {
+        history?.dateRange ?? selectedTimeframe.formattedDateRange()
+    }
+
+    var hasHistory: Bool { history != nil }
 
     @Published public var searchQuery: String = ""
     @Published public var categoryFilter: AppCategoryFilter = .all
     @Published public var sortOption: SortOption = .totalDescending
 
     @Published public var liveBandwidth: LiveBandwidth = LiveBandwidth()
-    @Published public var allRecords: [AppUsageRecord] = []
-    @Published public var chartPoints: [ChartDataPoint] = []
+    public var allRecords: [AppUsageRecord] { history?.records ?? [] }
+    public var chartPoints: [ChartDataPoint] { history?.chartPoints ?? [] }
 
-    @Published public var totalBytesIn: UInt64 = 0
-    @Published public var totalBytesOut: UInt64 = 0
-    @Published public var totalBytes: UInt64 = 0
-    @Published public var topAppName: String = "None"
-    @Published public var activeAppsCount: Int = 0
+    public var totalBytesIn: UInt64 { history?.bytesIn ?? 0 }
+    public var totalBytesOut: UInt64 { history?.bytesOut ?? 0 }
+    public var totalBytes: UInt64 { totalBytesIn + min(totalBytesOut, UInt64.max - totalBytesIn) }
+    public var topAppName: String { allRecords.first?.appName ?? "None" }
+    public var activeAppsCount: Int { allRecords.count }
 
     @Published public var pollingMode: PollingMode = .balanced {
         didSet {
-            NetworkCollector.shared.pollingMode = pollingMode
+            updatePollingMode()
             UserDefaults.standard.set(pollingMode.rawValue, forKey: "netcollect_polling_mode")
         }
     }
@@ -42,12 +79,14 @@ public final class AppUsageViewModel: ObservableObject {
         }
     }
 
-    @Published public var isShowingSettings: Bool = false
+    @Published private(set) var storageIssue: String?
+    @Published var settingsIssue: String?
+    @Published private(set) var isDeletingHistory = false
 
     @Published public var isBackgroundOnly: Bool = false {
         didSet {
             UserDefaults.standard.set(isBackgroundOnly, forKey: "netcollect_bg_only")
-            updateActivationPolicy()
+            AppDelegate.shared?.updateActivationPolicy()
         }
     }
 
@@ -55,7 +94,7 @@ public final class AppUsageViewModel: ObservableObject {
         didSet {
             UserDefaults.standard.set(isSilentBackgroundMode, forKey: "netcollect_silent_bg_mode")
             showMenuBarExtra = !isSilentBackgroundMode
-            updateActivationPolicy()
+            AppDelegate.shared?.updateActivationPolicy()
         }
     }
 
@@ -65,10 +104,22 @@ public final class AppUsageViewModel: ObservableObject {
         }
     }
 
-    @Published public var launchAtLogin: Bool = false {
-        didSet {
-            LaunchAtLoginService.shared.isEnabled = launchAtLogin
+    @Published private(set) var launchAtLogin = false
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            try LaunchAtLoginService.setEnabled(enabled)
+            if enabled && !LaunchAtLoginService.isEnabled {
+                settingsIssue = "Allow NetCollect under Login Items in System Settings to finish enabling launch at login."
+            }
+        } catch {
+            settingsIssue = error.localizedDescription
         }
+        refreshLaunchAtLoginStatus()
+    }
+
+    func refreshLaunchAtLoginStatus() {
+        launchAtLogin = LaunchAtLoginService.isEnabled
     }
 
     private var isHoverPrecisionActive: Bool = false
@@ -78,14 +129,20 @@ public final class AppUsageViewModel: ObservableObject {
     public func setHoverPrecision(active: Bool) {
         guard isHoverPrecisionActive != active else { return }
         isHoverPrecisionActive = active
-        if active {
-            NetworkCollector.shared.pollingMode = .oneSecond
-        } else {
-            NetworkCollector.shared.pollingMode = effectivePollingMode
-        }
+        updatePollingMode()
     }
 
     private var refreshTimer: Timer?
+    private var refreshTask: Task<Void, Never>?
+
+    private var sharedCollectionEnabled: Bool {
+        ProcessInfo.processInfo.environment["NETCOLLECT_DISABLE_SHARED_COLLECTION"] != "1"
+    }
+
+    private func updatePollingMode() {
+        guard sharedCollectionEnabled else { return }
+        NetworkCollector.shared.setPollingMode(isHoverPrecisionActive && !isLowPowerModeEnabled ? .oneSecond : effectivePollingMode)
+    }
 
     private var isLowPowerModeEnabled: Bool {
         ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -99,27 +156,23 @@ public final class AppUsageViewModel: ObservableObject {
     }
 
     private init() {
-        // Load preferences
-        if let savedMode = UserDefaults.standard.string(forKey: "netcollect_polling_mode") {
-            self.pollingMode = PollingMode.from(storedValue: savedMode)
-        }
-        if let savedRefreshRaw = UserDefaults.standard.object(forKey: "netcollect_data_refresh_interval") as? Int,
-           let interval = DataRefreshInterval(rawValue: savedRefreshRaw) {
-            self.dataRefreshInterval = interval
-        }
-        self.isBackgroundOnly = UserDefaults.standard.bool(forKey: "netcollect_bg_only")
-        self.isSilentBackgroundMode = UserDefaults.standard.bool(forKey: "netcollect_silent_bg_mode")
-        if UserDefaults.standard.object(forKey: "netcollect_show_menu_bar") != nil {
-            self.showMenuBarExtra = UserDefaults.standard.bool(forKey: "netcollect_show_menu_bar") && !self.isSilentBackgroundMode
-        } else {
-            self.showMenuBarExtra = !self.isSilentBackgroundMode
-        }
-        self.launchAtLogin = LaunchAtLoginService.shared.isEnabled
+        let defaults = UserDefaults.standard
+        let silentMode = defaults.bool(forKey: "netcollect_silent_bg_mode")
+        let menuBarPreference = defaults.object(forKey: "netcollect_show_menu_bar") as? Bool ?? true
+        let savedPollingMode = defaults.string(forKey: "netcollect_polling_mode")
+        let savedRefreshInterval = defaults.integer(forKey: "netcollect_data_refresh_interval")
+
+        // Seed property wrappers directly so initialization does not invoke
+        // preference setters or re-enter the shared view model via the delegate.
+        _isSilentBackgroundMode = Published(initialValue: silentMode)
+        _isBackgroundOnly = Published(initialValue: defaults.bool(forKey: "netcollect_bg_only"))
+        _showMenuBarExtra = Published(initialValue: menuBarPreference && !silentMode)
+        _pollingMode = Published(initialValue: savedPollingMode.map(PollingMode.from(storedValue:)) ?? .balanced)
+        _dataRefreshInterval = Published(initialValue: DataRefreshInterval(rawValue: savedRefreshInterval) ?? .threeSeconds)
+        _launchAtLogin = Published(initialValue: LaunchAtLoginService.isEnabled)
 
         setupPowerStateObserver()
         setupCollector()
-        loadUsageData()
-        loadChartData()
     }
 
     private func setupPowerStateObserver() {
@@ -129,8 +182,7 @@ public final class AppUsageViewModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self = self else { return }
-                NetworkCollector.shared.pollingMode = self.effectivePollingMode
+                self?.updatePollingMode()
             }
         }
     }
@@ -139,9 +191,8 @@ public final class AppUsageViewModel: ObservableObject {
     public func registerUIVisible() {
         activeUIRefCount += 1
         if activeUIRefCount == 1 {
-            NetworkCollector.shared.setUIVisible(true)
-            loadUsageData()
-            loadChartData()
+            if sharedCollectionEnabled { NetworkCollector.shared.setUIVisible(true) }
+            refreshData()
             restartRefreshTimer()
         }
     }
@@ -150,8 +201,10 @@ public final class AppUsageViewModel: ObservableObject {
     public func unregisterUIVisible() {
         activeUIRefCount = max(0, activeUIRefCount - 1)
         if activeUIRefCount == 0 {
-            NetworkCollector.shared.setUIVisible(false)
+            if sharedCollectionEnabled { NetworkCollector.shared.setUIVisible(false) }
             stopRefreshTimer()
+            refreshTask?.cancel()
+            refreshTask = nil
         }
     }
 
@@ -164,8 +217,7 @@ public final class AppUsageViewModel: ObservableObject {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: dataRefreshInterval.intervalSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self, self.isUIVisible else { return }
-                self.loadUsageData()
-                self.loadChartData()
+                self.refreshData()
             }
         }
     }
@@ -176,60 +228,49 @@ public final class AppUsageViewModel: ObservableObject {
     }
 
     private func setupCollector() {
-        guard ProcessInfo.processInfo.environment["NETCOLLECT_DISABLE_SHARED_COLLECTION"] != "1" else {
-            return
-        }
+        guard sharedCollectionEnabled else { return }
 
-        NetworkCollector.shared.onBandwidthUpdated = { [weak self] bandwidth in
+        NetworkCollector.shared.setBandwidthHandler { [weak self] bandwidth in
             Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                // Only trigger SwiftUI object changes when UI is actively open/rendered and value changed
-                if self.isUIVisible && self.liveBandwidth != bandwidth {
-                    self.liveBandwidth = bandwidth
-                }
+                guard let self, isUIVisible, liveBandwidth != bandwidth else { return }
+                liveBandwidth = bandwidth
             }
         }
 
-        NetworkCollector.shared.onDeltaReceived = { _ in
-            // Delta logged directly to SQLite memory buffer in background
-        }
-
-        NetworkCollector.shared.pollingMode = effectivePollingMode
+        updatePollingMode()
         NetworkCollector.shared.setUIVisible(isUIVisible)
-        NetworkCollector.shared.start()
+        startCollection()
     }
 
-    // MARK: - Data Loading
-    public func loadUsageData() {
-        let interval = selectedTimeframe.dateInterval()
-        let records = DatabaseService.shared.fetchUsage(from: interval.start, to: interval.end)
+    func startCollection() {
+        if sharedCollectionEnabled { NetworkCollector.shared.start() }
+    }
 
-        var sumIn: UInt64 = 0
-        var sumOut: UInt64 = 0
-        for r in records {
-            sumIn += r.bytesIn
-            sumOut += r.bytesOut
+    private func refreshData(replacingPending: Bool = false) {
+        guard isUIVisible, sharedCollectionEnabled else { return }
+        if replacingPending {
+            refreshTask?.cancel()
+        } else {
+            guard refreshTask == nil else { return }
         }
-        let total = sumIn + sumOut
-        let topApp = records.first?.appName ?? "None"
-        let count = records.count
 
-        // Guard assignments to prevent spurious SwiftUI re-render passes when values haven't changed
-        if self.totalBytesIn != sumIn { self.totalBytesIn = sumIn }
-        if self.totalBytesOut != sumOut { self.totalBytesOut = sumOut }
-        if self.totalBytes != total { self.totalBytes = total }
-        if self.topAppName != topApp { self.topAppName = topApp }
-        if self.activeAppsCount != count { self.activeAppsCount = count }
-        if self.allRecords != records { self.allRecords = records }
-    }
+        let timeframe = requestedTimeframe
+        let referenceDate = Date()
+        let interval = timeframe.dateInterval(for: referenceDate)
+        let grouping: TimeGrouping = timeframe == .daily ? .hourly : .daily
 
-    public func loadChartData() {
-        let interval = selectedTimeframe.dateInterval()
-        let grouping: TimeGrouping = (selectedTimeframe == .daily) ? .hourly : .daily
-        let points = DatabaseService.shared.fetchTimeSeries(from: interval.start, to: interval.end, grouping: grouping)
-        // Avoid invalidating the entire chart on every polling tick when no bucket changed.
-        if chartPoints != points {
-            chartPoints = points
+        refreshTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            let snapshot = await DatabaseService.shared.fetchSnapshot(for: interval, grouping: grouping)
+            guard let self, !Task.isCancelled else { return }
+            refreshTask = nil
+            if let snapshot {
+                let updatedHistory = UsageHistory(snapshot: snapshot, timeframe: timeframe, referenceDate: referenceDate)
+                if history != updatedHistory { history = updatedHistory }
+                if storageIssue != nil { storageIssue = nil }
+            } else if storageIssue == nil {
+                storageIssue = "Network history is temporarily unavailable. NetCollect will retry."
+            }
         }
     }
 
@@ -283,43 +324,17 @@ public final class AppUsageViewModel: ObservableObject {
         ByteCountFormatter.format(bytes: totalBytesOut)
     }
 
-    public func clearAllData() {
-        DatabaseService.shared.clearAllData()
-        loadUsageData()
-        loadChartData()
-    }
-
     public func deleteHistory(for period: HistoryDeletionPeriod, now: Date = Date()) {
-        if let interval = period.dateInterval(containing: now) {
-            DatabaseService.shared.deleteData(from: interval.start, to: interval.end)
-        } else {
-            DatabaseService.shared.clearAllData()
-        }
-        loadUsageData()
-        loadChartData()
-    }
-
-    public func updateActivationPolicy() {
-        if isSilentBackgroundMode {
-            let hasVisibleWindow = NSApp?.windows.contains(where: {
-                $0.isVisible && $0.canBecomeMain && !$0.isSheet && !(String(describing: type(of: $0)).contains("StatusBar"))
-            }) ?? false
-
-            if hasVisibleWindow {
-                NSApp?.setActivationPolicy(.regular)
-            } else {
-                NSApp?.setActivationPolicy(.accessory)
+        guard !isDeletingHistory else { return }
+        isDeletingHistory = true
+        let interval = period.dateInterval(containing: now)
+        Task {
+            let deleted = await DatabaseService.shared.deleteHistory(in: interval)
+            if !deleted {
+                settingsIssue = "Network history couldn’t be deleted. Try again."
             }
-        } else if isBackgroundOnly {
-            NSApp?.setActivationPolicy(.accessory)
-        } else {
-            NSApp?.setActivationPolicy(.regular)
+            isDeletingHistory = false
+            refreshData(replacingPending: true)
         }
-    }
-
-    public func quitApp() {
-        DatabaseService.shared.flushSync()
-        NetworkCollector.shared.stop()
-        NSApp?.terminate(nil)
     }
 }

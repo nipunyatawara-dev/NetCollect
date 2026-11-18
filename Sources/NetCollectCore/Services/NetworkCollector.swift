@@ -1,6 +1,6 @@
 import Foundation
 import Darwin
-import Combine
+import os
 
 /// Polling frequency modes for live bandwidth sampling.
 public enum PollingMode: String, CaseIterable, Identifiable, Sendable {
@@ -40,15 +40,6 @@ public enum PollingMode: String, CaseIterable, Identifiable, Sendable {
             return PollingMode(rawValue: storedValue) ?? .balanced
         }
     }
-}
-
-/// Real-time event for network usage updates.
-public struct NetworkDeltaEvent: Sendable {
-    public let pid: pid_t
-    public let rawName: String
-    public let bytesIn: UInt64
-    public let bytesOut: UInt64
-    public let resolvedApp: ResolvedAppInfo
 }
 
 /// A cumulative per-process counter returned by one `nettop` snapshot.
@@ -233,6 +224,7 @@ public struct NetworkInterfaceAccumulator: Sendable {
         var bytesOutPerSecond: Double = 0
         var comparedAnInterface = false
 
+        var current: [String: StoredCounters] = [:]
         for snapshot in snapshots {
             if let previous = counters[snapshot.name],
                snapshot.bytesIn >= previous.bytesIn,
@@ -244,13 +236,14 @@ public struct NetworkInterfaceAccumulator: Sendable {
             }
 
             // New, reset, or wrapped interface counters establish a fresh baseline.
-            counters[snapshot.name] = StoredCounters(
+            current[snapshot.name] = StoredCounters(
                 bytesIn: snapshot.bytesIn,
                 bytesOut: snapshot.bytesOut,
                 sampleUptime: sampleUptime
             )
         }
 
+        counters = current
         guard comparedAnInterface else { return nil }
         return NetworkInterfaceRate(
             bytesInPerSecond: bytesInPerSecond,
@@ -279,19 +272,25 @@ public final class NetworkCollector: @unchecked Sendable {
 
     private var peakInRate: Double = 0
     private var peakOutRate: Double = 0
-    private var lastBandwidthPublishDate: Date?
+    private var lastBandwidthPublishUptime: TimeInterval?
     private var pendingInRateTotal: Double = 0
     private var pendingOutRateTotal: Double = 0
     private var pendingRateSampleCount = 0
 
-    public var onDeltaReceived: (@Sendable (NetworkDeltaEvent) -> Void)?
-    public var onBandwidthUpdated: (@Sendable (LiveBandwidth) -> Void)?
+    private static let logger = Logger(subsystem: "com.netcollect.app", category: "collector")
+    private var sampleFailed = false
+    private var onBandwidthUpdated: (@Sendable (LiveBandwidth) -> Void)?
+    private var pollingMode: PollingMode = .balanced
 
-    public var pollingMode: PollingMode = .balanced {
-        didSet {
-            if isRunning && oldValue != pollingMode {
-                restart()
-            }
+    public func setBandwidthHandler(_ handler: (@Sendable (LiveBandwidth) -> Void)?) {
+        queue.async { [self] in onBandwidthUpdated = handler }
+    }
+
+    public func setPollingMode(_ mode: PollingMode) {
+        queue.async { [self] in
+            guard pollingMode != mode else { return }
+            pollingMode = mode
+            lastBandwidthPublishUptime = nil
         }
     }
 
@@ -300,7 +299,7 @@ public final class NetworkCollector: @unchecked Sendable {
     }
 
     deinit {
-        stop()
+        timer?.cancel()
     }
 
     public func setUIVisible(_ visible: Bool) {
@@ -326,37 +325,27 @@ public final class NetworkCollector: @unchecked Sendable {
         }
     }
 
-    public func stop() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.isRunning = false
-            self.stopTimer()
-            self.snapshotAccumulator.reset()
-            self.interfaceAccumulator.reset()
-            self.isBootstrapped = false
-            self.processIdentityTokens.removeAll()
-            self.processLastSeen.removeAll()
-            self.lastBandwidthPublishDate = nil
-            self.pendingInRateTotal = 0
-            self.pendingOutRateTotal = 0
-            self.pendingRateSampleCount = 0
-            self.collectionInterval = 1.0
-            self.consecutiveQuietSamples = 0
-        }
-    }
-
-    public func restart() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.stopTimer()
-            if self.isRunning {
-                self.lastBandwidthPublishDate = nil
-                self.pendingInRateTotal = 0
-                self.pendingOutRateTotal = 0
-                self.pendingRateSampleCount = 0
-                self.performSample()
-                self.startTimer()
+    /// Stops scheduling samples, drains the active sample, then persists its writes.
+    public func stopAndFlush(completion: (@Sendable (Bool) -> Void)? = nil) {
+        queue.async { [self] in
+            isRunning = false
+            stopTimer()
+            snapshotAccumulator.reset()
+            interfaceAccumulator.reset()
+            isBootstrapped = false
+            for pid in processIdentityTokens.keys {
+                AppResolver.shared.invalidatePID(pid)
             }
+            processIdentityTokens.removeAll()
+            processLastSeen.removeAll()
+            lastBandwidthPublishUptime = nil
+            pendingInRateTotal = 0
+            pendingOutRateTotal = 0
+            pendingRateSampleCount = 0
+            collectionInterval = 1
+            consecutiveQuietSamples = 0
+            let saved = databaseService.flushSync()
+            completion?(saved)
         }
     }
 
@@ -385,89 +374,116 @@ public final class NetworkCollector: @unchecked Sendable {
         timer = nil
     }
 
-    /// Uses a short-lived snapshot because continuous nettop consumes an entire CPU core on macOS 26.
+    /// Uses short-lived snapshots with a deadline so a stalled child cannot stop
+    /// future sampling or hold up sleep and termination indefinitely.
     private func performSample() {
-        var pipeFds: [Int32] = [0, 0]
-        guard pipe(&pipeFds) == 0 else { return }
-
-        var fileActions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&fileActions)
-        posix_spawn_file_actions_adddup2(&fileActions, pipeFds[1], STDOUT_FILENO)
-        posix_spawn_file_actions_addclose(&fileActions, pipeFds[0])
-
-        let devNull = open("/dev/null", O_WRONLY)
-        if devNull >= 0 {
-            posix_spawn_file_actions_adddup2(&fileActions, devNull, STDERR_FILENO)
-        }
-
-        let args: [UnsafeMutablePointer<CChar>?] = [
-            strdup("nettop"),
-            strdup("-P"),
-            strdup("-L"),
-            strdup("1"),
-            strdup("-J"),
-            strdup("bytes_in,bytes_out"),
-            strdup("-n"),
-            strdup("-t"),
-            strdup("wifi"),
-            strdup("-t"),
-            strdup("wired"),
-            strdup("-t"),
-            strdup("expensive"),
-            nil
-        ]
-
-        var pid: pid_t = 0
-        let spawnStatus = posix_spawnp(&pid, "/usr/bin/nettop", &fileActions, nil, args, nil)
-        posix_spawn_file_actions_destroy(&fileActions)
-        close(pipeFds[1])
-        if devNull >= 0 { close(devNull) }
-
-        for arg in args where arg != nil {
-            free(arg)
-        }
-
-        guard spawnStatus == 0 else {
-            close(pipeFds[0])
+        guard let data = readNettop(), processSnapshotData(data) else {
+            if !sampleFailed {
+                Self.logger.error("Unable to read network usage from nettop.")
+                sampleFailed = true
+            }
             return
         }
-
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let bytesRead = read(pipeFds[0], &buffer, buffer.count)
-            if bytesRead <= 0 { break }
-            data.append(buffer, count: bytesRead)
-        }
-        close(pipeFds[0])
-
-        var exitStatus: Int32 = 0
-        waitpid(pid, &exitStatus, 0)
-
-        processSnapshotData(data)
+        sampleFailed = false
     }
 
-    private func processSnapshotData(_ data: Data) {
-        guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
+    private func readNettop() -> Data? {
+        var pipeFds: [Int32] = [0, 0]
+        guard pipe(&pipeFds) == 0 else { return nil }
+        let input = pipeFds[0]
+        let output = pipeFds[1]
+        defer { close(input) }
+
+        var fileActions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+        guard posix_spawn_file_actions_init(&fileActions) == 0 else {
+            close(output)
+            return nil
+        }
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
+        guard posix_spawnattr_init(&attributes) == 0 else {
+            close(output)
+            return nil
+        }
+        defer { posix_spawnattr_destroy(&attributes) }
+
+        let executable = "/usr/bin/nettop"
+        let arguments = [executable, "-P", "-L", "1", "-J", "bytes_in,bytes_out", "-n",
+                         "-t", "wifi", "-t", "wired", "-t", "expensive"]
+        var argv = arguments.map { strdup($0) }
+        defer { for argument in argv { free(argument) } }
+        guard !argv.contains(nil),
+              fcntl(input, F_SETFD, FD_CLOEXEC) == 0,
+              fcntl(output, F_SETFD, FD_CLOEXEC) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0,
+              posix_spawn_file_actions_adddup2(&fileActions, output, STDOUT_FILENO) == 0,
+              posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0,
+              posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0 else {
+            close(output)
+            return nil
+        }
+
+        argv.append(nil)
+        var environment: [UnsafeMutablePointer<CChar>?] = [nil]
+        var pid: pid_t = 0
+        let status = posix_spawn(&pid, executable, &fileActions, &attributes, &argv, &environment)
+        close(output)
+        guard status == 0 else { return nil }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        var descriptor = pollfd(fd: input, events: Int16(POLLIN), revents: 0)
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            let ready = poll(&descriptor, 1, Int32(max(0, remaining * 1000).rounded(.up)))
+            if ready < 0 && errno == EINTR { continue }
+            guard ready > 0 else { break }
+            let count = read(input, &buffer, buffer.count)
+            if count < 0 && errno == EINTR { continue }
+            if count == 0 {
+                var status: Int32 = 0
+                while ProcessInfo.processInfo.systemUptime < deadline {
+                    let reaped = waitpid(pid, &status, WNOHANG)
+                    if reaped == pid { return status == 0 ? data : nil }
+                    if reaped < 0 && errno != EINTR { return nil }
+                    usleep(5_000)
+                }
+                break
+            }
+            guard count > 0, data.count + count <= 4 * 1024 * 1024 else { break }
+            data.append(buffer, count: count)
+        }
+
+        kill(pid, SIGKILL)
+        while waitpid(pid, nil, 0) < 0 && errno == EINTR {}
+        return nil
+    }
+
+    private func processSnapshotData(_ data: Data) -> Bool {
+        guard let output = String(data: data, encoding: .utf8),
+              let header = output.split(whereSeparator: \.isNewline).first,
+              header == ",bytes_in,bytes_out," else { return false }
 
         let now = Date()
+        let uptime = ProcessInfo.processInfo.systemUptime
         var processInRate: Double = 0
         var processOutRate: Double = 0
         var activeProcesses = 0
         var snapshots: [NetworkProcessSnapshot] = []
 
-        for rawLine in output.split(whereSeparator: \.isNewline) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty, !line.contains("bytes_in") else { continue }
+        for rawLine in output.split(whereSeparator: \.isNewline).dropFirst() {
+            let line = rawLine.hasSuffix(",") ? rawLine.dropLast() : rawLine
+            // Process names can contain commas. The numeric columns are at the end.
+            guard let outSeparator = line.lastIndex(of: ","),
+                  let inSeparator = line[..<outSeparator].lastIndex(of: ","),
+                  let currentIn = UInt64(line[line.index(after: inSeparator)..<outSeparator]),
+                  let currentOut = UInt64(line[line.index(after: outSeparator)...]) else { continue }
 
-            let columns = line.split(separator: ",", omittingEmptySubsequences: false)
-            guard columns.count >= 3,
-                  let currentIn = UInt64(columns[1]),
-                  let currentOut = UInt64(columns[2]) else { continue }
-
-            let processIdentifier = String(columns[0])
+            let processIdentifier = line[..<inSeparator]
             guard let dotIndex = processIdentifier.lastIndex(of: "."),
-                  let pid = pid_t(processIdentifier[processIdentifier.index(after: dotIndex)...]) else { continue }
+                  let pid = pid_t(processIdentifier[processIdentifier.index(after: dotIndex)...]),
+                  pid >= 0 else { continue }
 
             let rawName = String(processIdentifier[..<dotIndex])
             let processStartIdentifier = processStartIdentifier(for: pid)
@@ -513,13 +529,6 @@ public final class NetworkCollector: @unchecked Sendable {
                 isTrafficRelay: resolved.isTrafficRelay
             )
 
-            onDeltaReceived?(NetworkDeltaEvent(
-                pid: pid,
-                rawName: rawName,
-                bytesIn: deltaIn,
-                bytesOut: deltaOut,
-                resolvedApp: resolved
-            ))
         }
 
         let resolverRetention: TimeInterval = 60 * 60
@@ -536,7 +545,7 @@ public final class NetworkCollector: @unchecked Sendable {
 
         guard isBootstrapped else {
             isBootstrapped = true
-            return
+            return true
         }
 
         let inRate = interfaceRate?.bytesInPerSecond ?? processInRate
@@ -549,11 +558,11 @@ public final class NetworkCollector: @unchecked Sendable {
         pendingOutRateTotal += outRate
         pendingRateSampleCount += 1
 
-        if let lastBandwidthPublishDate,
-           now.timeIntervalSince(lastBandwidthPublishDate) < Double(pollingMode.intervalSeconds) {
-            return
+        if let lastBandwidthPublishUptime,
+           uptime - lastBandwidthPublishUptime < Double(pollingMode.intervalSeconds) {
+            return true
         }
-        lastBandwidthPublishDate = now
+        lastBandwidthPublishUptime = uptime
         let sampleCount = max(1, pendingRateSampleCount)
         let publishedInRate = pendingInRateTotal / Double(sampleCount)
         let publishedOutRate = pendingOutRateTotal / Double(sampleCount)
@@ -568,6 +577,7 @@ public final class NetworkCollector: @unchecked Sendable {
             peakOutPerSecond: peakOutRate,
             activeProcessCount: activeProcesses
         ))
+        return true
     }
 
     private func processStartIdentifier(for pid: pid_t) -> UInt64 {
@@ -598,31 +608,41 @@ public final class NetworkCollector: @unchecked Sendable {
     }
 
     private func readExternalInterfaceSnapshots() -> [NetworkInterfaceSnapshot] {
-        var firstAddress: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&firstAddress) == 0, let firstAddress else { return [] }
-        defer { freeifaddrs(firstAddress) }
+        // getifaddrs exposes 32-bit byte counters on macOS. NET_RT_IFLIST2
+        // supplies 64-bit counters, so fast transfers do not wrap at 4 GiB.
+        var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0]
+        var size = 0
+        guard sysctl(&mib, 6, nil, &size, nil, 0) == 0, size > 0 else { return [] }
 
-        var snapshots: [NetworkInterfaceSnapshot] = []
-        var cursor: UnsafeMutablePointer<ifaddrs>? = firstAddress
-        while let current = cursor {
-            let interface = current.pointee
-            cursor = interface.ifa_next
-
-            guard let address = interface.ifa_addr,
-                  Int32(address.pointee.sa_family) == AF_LINK,
-                  interface.ifa_flags & UInt32(IFF_UP) != 0,
-                  let dataPointer = interface.ifa_data else { continue }
-
-            let name = String(cString: interface.ifa_name)
-            guard name.hasPrefix("en") || name.hasPrefix("pdp_ip") else { continue }
-
-            let statistics = dataPointer.assumingMemoryBound(to: if_data.self).pointee
-            snapshots.append(NetworkInterfaceSnapshot(
-                name: name,
-                bytesIn: UInt64(statistics.ifi_ibytes),
-                bytesOut: UInt64(statistics.ifi_obytes)
-            ))
+        var buffer = Data(count: size)
+        let result = buffer.withUnsafeMutableBytes { bytes in
+            sysctl(&mib, 6, bytes.baseAddress, &size, nil, 0)
         }
-        return snapshots
+        guard result == 0 else { return [] }
+
+        return buffer.withUnsafeBytes { bytes in
+            var snapshots: [NetworkInterfaceSnapshot] = []
+            var offset = 0
+            while size - offset >= 4 {
+                let length = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
+                guard length >= 4, length <= size - offset else { break }
+                defer { offset += length }
+                guard bytes[offset + 2] == UInt8(RTM_VERSION),
+                      bytes[offset + 3] == UInt8(RTM_IFINFO2),
+                      length >= MemoryLayout<if_msghdr2>.size else { continue }
+                let interface = bytes.loadUnaligned(fromByteOffset: offset, as: if_msghdr2.self)
+                guard interface.ifm_flags & IFF_UP != 0 else { continue }
+                var nameBuffer = [CChar](repeating: 0, count: Int(IFNAMSIZ))
+                guard if_indextoname(UInt32(interface.ifm_index), &nameBuffer) != nil else { continue }
+                let name = nameBuffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+                guard name.hasPrefix("en") || name.hasPrefix("pdp_ip") else { continue }
+                snapshots.append(NetworkInterfaceSnapshot(
+                    name: name,
+                    bytesIn: interface.ifm_data.ifi_ibytes,
+                    bytesOut: interface.ifm_data.ifi_obytes
+                ))
+            }
+            return snapshots
+        }
     }
 }

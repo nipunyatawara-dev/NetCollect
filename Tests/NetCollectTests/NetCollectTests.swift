@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import NetCollectCore
 
 final class BandwidthRecorder: @unchecked Sendable {
@@ -50,6 +51,8 @@ struct NetCollectTestsRunner {
         testChartDataPointIdentity()
         testDatabaseServiceOperations()
         testRangedHistoryDeletion()
+        testPersistenceRecovery()
+        testPrivateStorage()
         testAppResolverCleaning()
         testSilentBackgroundModeSettings()
         testRefreshAndSamplingSettings()
@@ -80,8 +83,8 @@ struct NetCollectTestsRunner {
         let database = DatabaseService(databaseURL: dbURL)
         let collector = NetworkCollector(databaseService: database)
         let bandwidthRecorder = BandwidthRecorder()
-        collector.onBandwidthUpdated = { bandwidthRecorder.record($0) }
-        collector.pollingMode = .oneSecond
+        collector.setBandwidthHandler { bandwidthRecorder.record($0) }
+        collector.setPollingMode(.oneSecond)
         collector.setUIVisible(true)
         collector.start()
 
@@ -124,8 +127,9 @@ struct NetCollectTestsRunner {
         assert(downloadRates.contains(where: { $0 >= 100_000 }), "Physical-interface speed reacts to the known download")
         assert(downloadRates.allSatisfy { $0 < 100_000_000 }, "Physical-interface speed cannot become a lifetime-counter spike")
 
-        collector.onBandwidthUpdated = nil
-        collector.stop()
+        let stopped = DispatchSemaphore(value: 0)
+        collector.stopAndFlush { _ in stopped.signal() }
+        assert(stopped.wait(timeout: .now() + 5) == .success, "Collector stop drains its sample and usage writes")
     }
 
     static func testSnapshotDeltaAccounting() {
@@ -360,6 +364,7 @@ struct NetCollectTestsRunner {
         let records = db.fetchUsage(from: startOfDay, to: testDate.addingTimeInterval(3600))
 
         assert(records.count == 2, "Fetched exactly 2 aggregated records")
+        guard records.count == 2 else { return }
         assert(records[0].bundleId == "com.google.Chrome", "Chrome is ranked #1 by total usage")
         assert(records[0].bytesIn == 30_000_000, "Chrome bytesIn is 30 MB")
         assert(records[0].bytesOut == 2_000_000, "Chrome bytesOut is 2 MB")
@@ -468,6 +473,84 @@ struct NetCollectTestsRunner {
         assert(remainingIDs.contains("tomorrow"), "Ranged deletion preserves the exclusive end boundary")
     }
 
+    static func testPersistenceRecovery() {
+        print("\n--- Testing Quiet Flush and Recovery ---")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.sqlite")
+        let database = DatabaseService(databaseURL: url)
+        var connection: OpaquePointer?
+        guard sqlite3_open(url.path, &connection) == SQLITE_OK, let connection else {
+            assert(false, "Second SQLite connection opens")
+            return
+        }
+        defer { sqlite3_close(connection) }
+
+        let now = Date()
+        let start = Calendar.current.startOfDay(for: now)
+        func record(_ id: String, _ bytes: UInt64) {
+            database.recordUsage(date: now, bundleId: id, appName: id, appPath: nil,
+                                 bytesIn: bytes, bytesOut: 0, isSystem: false)
+        }
+
+        assert(sqlite3_exec(connection, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK, "External connection locks writes")
+        record("com.example|traffic", 1234)
+        assert(!database.flushSync(), "Locked write reports a failure")
+        assert(!database.clearAllData(), "Locked deletion reports a failure")
+        assert(sqlite3_exec(connection, "ROLLBACK;", nil, nil, nil) == SQLITE_OK, "External connection releases its lock")
+        record("com.example|traffic", 42)
+        assert(database.flushSync(), "Retry commits buffered records")
+        assert(database.fetchUsage(from: start).first?.bytesIn == 1276, "Failed writes and deletion preserve all samples exactly once")
+
+        let trigger = """
+            CREATE TRIGGER reject_sample BEFORE INSERT ON hourly_usage
+            WHEN NEW.bundle_id = 'rejected' BEGIN SELECT RAISE(ABORT, 'rejected'); END;
+            """
+        assert(sqlite3_exec(connection, trigger, nil, nil, nil) == SQLITE_OK, "Can inject an insert error")
+        record("rejected", 600)
+        record("valid", 100)
+        assert(!database.flushSync(), "An insert error fails the whole batch")
+        var statement: OpaquePointer?
+        sqlite3_prepare_v2(connection, "SELECT COUNT(*) FROM hourly_usage;", -1, &statement, nil)
+        assert(sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_int(statement, 0) == 1, "Insert error rolls back all rows")
+        sqlite3_finalize(statement)
+        assert(sqlite3_exec(connection, "DROP TRIGGER reject_sample;", nil, nil, nil) == SQLITE_OK, "Injected insert error is removed")
+        record("quiet", 200)
+        let deadline = Date().addingTimeInterval(8)
+        var rowCount: Int32 = 0
+        while Date() < deadline && rowCount != 4 {
+            Thread.sleep(forTimeInterval: 0.1)
+            sqlite3_prepare_v2(connection, "SELECT COUNT(*) FROM hourly_usage;", -1, &statement, nil)
+            if sqlite3_step(statement) == SQLITE_ROW { rowCount = sqlite3_column_int(statement, 0) }
+            sqlite3_finalize(statement)
+        }
+        assert(rowCount == 4, "Timer retries and saves a quiet sample without a UI read or explicit flush")
+        let records = database.fetchUsage(from: start)
+        assert(records.first(where: { $0.id == "valid" })?.bytesIn == 100, "Retried inserts do not double count")
+        assert(records.first(where: { $0.id == "rejected" })?.bytesIn == 600, "Previously rejected insert survives retry")
+    }
+
+    static func testPrivateStorage() {
+        print("\n--- Testing Local Storage Permissions ---")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let manager = FileManager.default
+        try! manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("history.sqlite")
+        let database = DatabaseService(databaseURL: path)
+        let attributes = try? manager.attributesOfItem(atPath: path.path)
+        assert(attributes?[.posixPermissions] as? Int == 0o600, "SQLite history is private to its owner")
+
+        let link = directory.appendingPathComponent("symlink")
+        try! manager.createSymbolicLink(at: link, withDestinationURL: path)
+        assert(!SingleInstanceGuard(lockURL: link).acquire(), "Collector lock refuses a symbolic link")
+        let linkedDatabase = DatabaseService(databaseURL: link)
+        linkedDatabase.recordUsage(bundleId: "test", appName: "test", appPath: nil, bytesIn: 1, bytesOut: 0, isSystem: false)
+        assert(!linkedDatabase.flushSync(), "SQLite refuses a symbolic link")
+        assert(database.fetchUsage(from: .distantPast).isEmpty, "Refused link did not change its target")
+    }
+
     static func testAppResolverCleaning() {
         print("\n--- Testing AppResolver ---")
         let resolver = AppResolver.shared
@@ -539,13 +622,6 @@ struct NetCollectTestsRunner {
 
         vm.pollingMode = .tenSeconds
         assert(UserDefaults.standard.string(forKey: "netcollect_polling_mode") == PollingMode.tenSeconds.rawValue, "pollingMode persisted to UserDefaults")
-
-        // Test isShowingSettings
-        let appDelegate = AppDelegate()
-        assert(vm.isShowingSettings == false, "Initial isShowingSettings is false")
-        appDelegate.openSettingsWindow()
-        assert(vm.isShowingSettings == true, "openSettingsWindow sets isShowingSettings to true")
-        vm.isShowingSettings = false
 
         // Restore initial settings
         vm.dataRefreshInterval = initialRefresh

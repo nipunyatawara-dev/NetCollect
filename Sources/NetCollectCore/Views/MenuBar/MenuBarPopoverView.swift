@@ -4,7 +4,6 @@ import AppKit
 /// A compact, source-anchored control surface for quick network checks.
 public struct MenuBarPopoverView: View {
     @ObservedObject var viewModel: AppUsageViewModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public var onOpenDashboard: () -> Void
     public var onOpenSettings: () -> Void
     public var onQuit: () -> Void
@@ -34,16 +33,22 @@ public struct MenuBarPopoverView: View {
             header
 
             VStack(spacing: 14) {
-                liveSummary
                 TimeframeSegmentPicker(selected: $viewModel.selectedTimeframe)
-                topApplications
+                if let storageIssue = viewModel.storageIssue {
+                    Label(storageIssue, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, minHeight: 100)
+                }
+                if viewModel.hasHistory {
+                    liveSummary
+                    topApplications
+                }
             }
             .padding(14)
 
             footer
         }
         .frame(width: 340)
-        .background(.ultraThinMaterial)
         .onAppear {
             viewModel.registerUIVisible()
         }
@@ -84,11 +89,8 @@ public struct MenuBarPopoverView: View {
                     onQuit()
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 26, height: 24)
-                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .contentShape(Rectangle())
+                Label("More options", systemImage: "ellipsis.circle")
+                    .labelStyle(.iconOnly)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -121,7 +123,7 @@ public struct MenuBarPopoverView: View {
 
                 Spacer()
 
-                Text(viewModel.selectedTimeframe.rangeDescription())
+                Text("\(viewModel.selectedTimeframe.title) (\(viewModel.displayedDateRange))")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -246,33 +248,12 @@ public struct MenuBarPopoverView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
-            Button {
-                onOpenDashboard()
-            } label: {
-                HStack {
-                    Image(systemName: "macwindow")
-                    Text("Open NetCollect")
-                    Spacer()
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .opacity(0.8)
-                }
-                .font(.system(size: 11, weight: .semibold))
-                .padding(.horizontal, 11)
-                .frame(height: 31)
-                .contentShape(Rectangle())
-                .foregroundStyle(.white)
-                .background(NetCollectDesign.accent.gradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            }
-            .buttonStyle(NetCollectPressStyle())
+        Button(action: onOpenDashboard) {
+            Label("Open NetCollect", systemImage: "macwindow")
+                .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.primary.opacity(0.075))
-                .frame(height: 1)
-        }
+        .netCollectProminentButton()
+        .controlSize(.large)
+        .padding([.horizontal, .bottom], 14)
     }
 }
